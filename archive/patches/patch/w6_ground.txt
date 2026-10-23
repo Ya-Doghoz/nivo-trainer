@@ -1,0 +1,18 @@
+export function groundH(x, z) {
+  if (!P) return 0;
+  const rr = Math.hypot(x, z);
+  // تحوير الإحداثيات + تلال عريضة + خطوط حادة (ridged) + تفاصيل صغيرة
+  const wx = x + 45 * (vnoise(x * 0.008 + P.ox, z * 0.008 + P.oz) - 0.5), wz = z + 45 * (vnoise(x * 0.008 + P.oz, z * 0.008 + P.ox) - 0.5);
+  const big = (fbm(wx * P.f + P.ox, wz * P.f + P.oz) - 0.47) * 2 * P.amp;
+  const rg = 1 - Math.abs(2 * vnoise(wx * 0.018 + P.ox * 2.1, wz * 0.018 + P.oz * 1.7) - 1);
+  const mid = (rg * rg - 0.3) * P.amp2 * 2.2 + (fbm(x * 0.04 + P.ox * 3, z * 0.04 + P.oz * 3) - 0.47) * 0.5;
+  let h = big + mid + P.tx * x + P.tz * z;
+  // مدرّجات زراعية في بعض المناطق
+  const tz = smooth(0.58, 0.72, vnoise(x * 0.005 + P.ox * 1.9, z * 0.005 + P.oz * 1.1));
+  if (tz > 0) { const s = 0.9, k = h / s, f = k - Math.floor(k); h += ((Math.floor(k) + smooth(0.78, 1.0, f)) * s - h) * 0.75 * tz; }
+  const rim = smooth(170, 340, rr);
+  return h + rim * rim * P.rim * (0.6 + 0.8 * vnoise(x * 0.01 + 5, z * 0.01 + 9));
+}
+
+// NIVO-V6
+

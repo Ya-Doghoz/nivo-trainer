@@ -1,0 +1,3 @@
+$('#cfgVeg').value = String(CFG.veg);
+$('#cfgVeg').onchange = e => { CFG.veg = +e.target.value; saveCfg(); setVegDensity(CFG.veg); newWorld(seed); toast('كثافة الأشجار: ' + e.target.selectedOptions[0].text); };
+

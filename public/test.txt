@@ -1,0 +1,3030 @@
+// ميلان الميرا + التأرجح + هبوط الحامل والميرا على الأرض الطرية قرب الماء
+import * as I from './instrument.js';
+import { setStaffTilt } from './targets.js';
+import { wetness, groundH, holder } from './world.js';
+
+const $ = s => document.querySelector(s), DEG = Math.PI / 180;
+const T = { lean: 0, roll: 0, cur: 0, rock: 0, t: 0, min: 1e9 };
+const N = () => window.NIVO || {};
+const bub = $('#stBub'), bc = bub ? bub.getContext('2d') : null;
+
+function apply() {
+  T.cur = T.lean + (T.rock > 0 ? 4.5 * Math.sin(T.t * 2 * Math.PI / 2.4) : 0);
+  setStaffTilt(T.cur * DEG, T.roll * DEG);
+  const a = $('#tiltLv'), b = $('#tiltRv');
+  if (a) a.textContent = T.lean.toFixed(1) + '°';
+  if (b) b.textContent = T.roll.toFixed(1) + '°';
+}
+function drawBub() {
+  if (!bc) return;
+  bc.clearRect(0, 0, 60, 60); bc.fillStyle = '#0d2a22'; bc.beginPath(); bc.arc(30, 30, 28, 0, 7); bc.fill();
+  bc.strokeStyle = '#fff'; bc.lineWidth = 1.5; bc.beginPath(); bc.arc(30, 30, 6, 0, 7); bc.stroke();
+  let x = T.roll * 6, y = -T.cur * 6; const L = Math.hypot(x, y);
+  if (L > 20) { x *= 20 / L; y *= 20 / L; }
+  bc.fillStyle = 'rgba(190,255,225,.9)'; bc.beginPath(); bc.arc(30 + x, 30 + y, 5, 0, 7); bc.fill();
+}
+if ($('#tiltL')) {
+  $('#tiltL').oninput = e => { T.lean = +e.target.value; apply(); };
+  $('#tiltR').oninput = e => { T.roll = +e.target.value; apply(); };
+  $('#btnPlumb').onclick = () => { T.lean = T.roll = 0; T.rock = 0; $('#tiltL').value = 0; $('#tiltR').value = 0; apply(); };
+  $('#btnRock').onclick = () => { T.rock = 8; T.t = 0; T.min = 1e9; N().toast && N().toast('تأرجح الميرا: اقرأ أصغر قيمة تراها'); };
+}
+
+// ---- الأرض الطرية قرب الماء ----
+let wts = [1, 0.7, 0.4], lastKey = '', warnT = 0;
+function soft(dt) {
+  const rp = I.rigPos;
+  if (I.st.mounted) {
+    const key = rp.x + ',' + rp.z;
+    if (key !== lastKey) { lastKey = key; wts = [0, 1, 2].map(() => 0.3 + Math.random() * 0.7); warnT = 0; }
+    const w = wetness(rp.x, rp.z);
+    if (w > 0.3) {
+      const k = 0.00004 * w * dt;                     // ≈ 2.4 مم/دقيقة عند الرطوبة الكاملة
+      for (let i = 0; i < 3; i++) I.st.leg[i] = Math.max(-0.06, I.st.leg[i] - k * wts[i]);
+      warnT += k;
+      if (warnT > 0.0015) { warnT = -0.004; N().toast && N().toast('⚠ الأرض طرية قرب الماء: الحامل يهبط ببطء — أعد التسوية قبل كل قراءة'); }
+    }
+  }
+  const g = holder.group.position;
+  if (!holder.walking && holder.station) {
+    const w = wetness(g.x, g.z);
+    if (w > 0.3) g.y = Math.max(groundH(g.x, g.z) - 0.03, g.y - 0.00002 * w * dt);   // تغوص الميرا قليلاً
+  }
+}
+
+let last = performance.now();
+(function tick(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (T.rock > 0) {
+    T.rock -= dt; T.t += dt; apply();
+    const s = N().sight && N().sight();
+    if (s && s.hit && Number.isFinite(s.reading)) T.min = Math.min(T.min, s.reading);
+    if (T.rock <= 0) {
+      T.rock = 0; apply();
+      const ex = N().cfg && N().cfg().exam;
+      if (N().say) N().say(ex ? 'انتهى التأرجح: القراءة الصحيحة هي أصغر قيمة رأيتها.' : (T.min < 1e8 ? `أصغر قراءة خلال التأرجح = ${T.min.toFixed(3)} م (هي القراءة الصحيحة)` : 'انتهى التأرجح'), 'ok');
+    }
+  }
+  drawBub(); soft(dt);
+  requestAnimationFrame(tick);
+})(last);
+import * as THREE from 'three';
+import { renderer, scene, holder, instPos, sendTo, placeHolderAt, faceInstrument, updateHolder, groundH, setStaffStyle, setQuality, regen, mapImage, setMarkers, mulberry32, setVegDensity, isWater, inHouse, wetness, riverPath, houseList, bridgeInfo, dryNear, riverInfo } from './world.js';
+import * as I from './instrument.js';
+import * as SM from './survey-math.js';
+import { createScopeFX } from './scopefx.js';
+import { prismFace, setTarget, setPrismHeight, getPrismHeight, setStaffZero } from './targets.js';
+
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const V3 = THREE.Vector3, DEG = Math.PI / 180, FOV = 1.2, TAU = Math.PI * 2;
+const wrapPi = SM.wrapPi;
+const cap = (el, id) => { try { el.setPointerCapture(id); } catch (e) { /* تجاهل */ } };
+const numOrNull = v => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
+const f3 = v => (v === null || v === undefined || Number.isNaN(v) ? '' : v.toFixed(3));
+const dms = SM.dms;
+
+function showErr(m) { const b = $('#err'); b.textContent = '⚠ ' + m; b.style.display = 'block'; }
+addEventListener('error', e => showErr(e.message));
+addEventListener('unhandledrejection', e => showErr(String(e.reason)));
+
+// ================= الإعدادات =================
+const raw = (() => { try { return JSON.parse(localStorage.getItem('nivoCfg') || '{}'); } catch (e) { return {}; } })();
+if (raw.start && !raw.state) { raw.legs = raw.start === 'leveled' ? 'level' : 'random'; raw.state = raw.start === 'legs' ? 'off' : raw.start; }
+const CFG = Object.assign({ legs: 'random', state: 'off', inst: 'level', err: true, errK: 1, veg: 0.5, pat: 'E', lab: 'dots', q: '1.5', ui: '0.9', seed: '', fix: false, exam: false, manual: false }, raw);
+const saveCfg = () => { try { localStorage.setItem('nivoCfg', JSON.stringify(CFG)); } catch (e) { /* تجاهل */ } };
+document.documentElement.style.setProperty('--k', CFG.ui);
+
+const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 700);
+const scopeCam = new THREE.PerspectiveCamera(FOV, 1, 1, 400);
+const cv = $('#c'), scopeEl = $('#scope'), fx = createScopeFX(renderer);
+const elSheet = $('#sheet'), elT1 = $('#t1'), elLegs = $('#legsBox'), jogT = $('#jogT'), mapBox = $('#mapBox'), lblBox = $('#labels');
+const mqSide = matchMedia('(min-width:760px) and (min-aspect-ratio:5/4)');
+const sideLayout = () => mqSide.matches;
+const isTT = () => I.type !== 'level';
+let scopeFull = false, focV = 0.1, eyeV = 0.95, blurFrac = 0, softFrac = 0, fine = false, lastMeas = '';
+const eyeIdeal = 0.3 + Math.random() * 0.4;
+const mapOpen = () => mapBox.style.display === 'block';
+
+let tT;
+function toast(m) { const t = $('#toast'); t.textContent = m; t.style.opacity = 1; clearTimeout(tT); tT = setTimeout(() => (t.style.opacity = 0), 2800); }
+function openTab(id) { $(`#tabs [data-t="${id}"]`).click(); }
+const cache = {};
+function setTxt(sel, v) { if (cache[sel] !== v) { cache[sel] = v; $(sel).textContent = v; } }
+function setCl(sel, v) { const k = sel + '#c'; if (cache[k] !== v) { cache[k] = v; $(sel).className = v; } }
+
+// ================= المهمة (Job) والحالة =================
+let seed = 0, job = { points: [], setups: [], cur: 0, E0: 1000, N0: 1000 }, rows = [], rowsT = [];
+const ptById = id => job.points.find(p => p.id === id);
+const setupById = id => job.setups.find(s => s.id === id);
+const trueRL = p => { const bm = job.points.find(q => q.bm && q.elev != null); return bm ? bm.elev + groundH(p.x, p.z) - groundH(bm.x, bm.z) : null; };
+const zOf = p => { const t = trueRL(p); return t === null ? 0 : t; };
+const crd = (x, z) => ({ E: (job.E0 ?? 1000) + x, N: (job.N0 ?? 1000) - z });
+const nextId = pre => { let n = 1; while (job.points.some(p => p.id === pre + n)) n++; return pre + n; };
+const nextSetup = () => { let n = 1; while (job.setups.some(s => s.id === 'S' + n)) n++; return 'S' + n; };
+const saveState = () => { try { localStorage.setItem('nivoState', JSON.stringify({ seed, job, rows, rowsT })); } catch (e) { /* تجاهل */ } };
+const loadSaved = sd => { try { const j = JSON.parse(localStorage.getItem('nivoState') || 'null'); return j && j.seed === sd && j.job && j.job.points ? j : null; } catch (e) { return null; } };
+
+function randomJob(sd) {
+  const r = mulberry32(sd * 131 + 5), E0 = 1000 + Math.round(r() * 8000), N0 = 1000 + Math.round(r() * 8000);
+  const wet = (a, b) => { for (let t = 0; t <= 1; t += 0.04) if (isWater(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t)) return true; return false; };
+  const hs = houseList(), minD = r() < 0.7 ? 30 : 6;   // غالباً بعيد عن النهر، وأحياناً قريب منه
+  const okS = (x, z) => {
+    if (isWater(x, z) || inHouse(x, z)) return false;
+    const ri = riverInfo(x, z);
+    return ri.d > ri.hw + minD && hs.every(h => Math.hypot(x - h.x, z - h.z) > h.w + 10);
+  };
+  let s0 = null;
+  for (let k = 0; k < 500 && !s0; k++) {
+    const a = r() * 6.283, d = Math.sqrt(r()) * 70, x = Math.round(Math.cos(a) * d), z = Math.round(Math.sin(a) * d);
+    if (okS(x, z)) s0 = { x, z };
+  }
+  if (!s0) s0 = dryNear(0, 0);
+  for (let tries = 0; tries < 80; tries++) {
+    const pts = [], placed = [{ x: s0.x, z: s0.z }];
+    const ok = (x, z) => Math.hypot(x - s0.x, z - s0.z) > 12 && Math.abs(x) < 135 && Math.abs(z) < 135 && !isWater(x, z) && !inHouse(x, z) && placed.every(q => Math.hypot(q.x - x, q.z - z) >= 18) && !wet(s0, { x, z });
+    const mk = (id, bm, dmin, dmax) => {
+      for (let k = 0; k < 40; k++) {
+        const a = r() * 6.283, d = dmin + r() * (dmax - dmin), x = Math.round(s0.x + Math.cos(a) * d), z = Math.round(s0.z + Math.sin(a) * d);
+        if (ok(x, z)) { placed.push({ x, z }); const p = { id, x, z, bm, elev: null }; pts.push(p); return p; }
+      }
+      return null;
+    };
+    const bm = mk('BM1', true, 25, 45); if (!bm) continue;
+    const n = 3 + Math.floor(r() * 3); let good = true;
+    for (let i = 1; i <= n; i++) if (!mk('P' + i, false, 20, 85)) good = false;
+    if (!good) continue;
+    const hi = groundH(s0.x, s0.z) + 1.6, inR = p => { const Rr = hi - groundH(p.x, p.z); return Rr > 0.4 && Rr < 3.6; };
+    if (!inR(bm) || pts.filter(p => !p.bm && inR(p)).length < 2) continue;
+    bm.elev = Math.round((50 + r() * 450) * 1000) / 1000;
+    return { points: pts, setups: [{ id: 'S1', x: s0.x, z: s0.z }], cur: 0, E0, N0 };
+  }
+  const a = dryNear(s0.x + 30, s0.z - 20), b = dryNear(s0.x - 25, s0.z - 30), c = dryNear(s0.x + 40, s0.z + 35);
+  return { points: [{ id: 'BM1', x: a.x, z: a.z, bm: true, elev: 100 }, { id: 'P1', x: b.x, z: b.z, bm: false, elev: null }, { id: 'P2', x: c.x, z: c.z, bm: false, elev: null }], setups: [{ id: 'S1', x: s0.x, z: s0.z }], cur: 0, E0, N0 };
+}
+
+// ================= الكاميرا الخارجية =================
+const orb = { az: 0.7, el: 0.28, dist: 5.2, tDist: 5.2, t: new V3(0, 1, 0), tt: new V3(0, 1, 0), mode: 'tripod', part: null };
+const DIST = () => {
+  const g = holder.group.position, rp = I.rigPos;
+  return { all: clamp(1.4 * Math.hypot(rp.x - g.x, rp.z - g.z), 25, 160), tripod: 5.2, inst: I.st.exTarget ? 2.8 : 1.3, staff: 8 };
+};
+function setMode(m, d) {
+  orb.mode = m; if (d) orb.tDist = d;
+  $$('[data-cam]').forEach(b => b.classList.toggle('on', b.dataset.cam === m));
+  if (scopeFull) toggleFull(false);
+}
+$$('[data-cam]').forEach(b => (b.onclick = () => setMode(b.dataset.cam, DIST()[b.dataset.cam])));
+
+function camTargets() {
+  const rp = I.rigPos, g = holder.group.position;
+  if (orb.mode === 'all') orb.tt.set((rp.x + g.x) / 2, 1.5 + (rp.y + g.y) / 2, (rp.z + g.z) / 2);
+  else if (orb.mode === 'tripod') orb.tt.set(rp.x, rp.y + I.st.Hc * 0.5 + 0.1, rp.z);
+  else if (orb.mode === 'inst') orb.tt.set(rp.x, rp.y + I.st.Hc + 0.1 + I.st.explode * 0.45, rp.z);
+  else if (orb.mode === 'staff') orb.tt.set(g.x, g.y + 1.8, g.z);
+  else if (orb.mode === 'part' && orb.part) orb.part.anchor.getWorldPosition(orb.tt);
+}
+function snapCam() { camTargets(); orb.t.copy(orb.tt); orb.dist = orb.tDist; }
+function updCam(dt) {
+  camTargets();
+  const k = 1 - Math.pow(0.003, dt);
+  orb.t.lerp(orb.tt, k); orb.dist += (orb.tDist - orb.dist) * k;
+  const d = orb.dist, ce = Math.cos(orb.el);
+  cam.position.set(orb.t.x + d * ce * Math.sin(orb.az), orb.t.y + d * Math.sin(orb.el), orb.t.z + d * ce * Math.cos(orb.az));
+  cam.lookAt(orb.t);
+}
+
+const ptrs = new Map(); let pinch0 = 0;
+cv.addEventListener('pointerdown', e => {
+  cap(cv, e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); }
+});
+cv.addEventListener('pointermove', e => {
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+  if (ptrs.size === 1) { orb.az -= dx * 0.006; orb.el = clamp(orb.el + dy * 0.006, 0.02, 1.5); }
+  else if (ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinch0 && d > 1) orb.tDist = clamp(orb.tDist * pinch0 / d, 0.4, 200);
+    pinch0 = d;
+  }
+});
+const pUp = e => { ptrs.delete(e.pointerId); pinch0 = 0; };
+cv.addEventListener('pointerup', pUp); cv.addEventListener('pointercancel', pUp);
+cv.addEventListener('wheel', e => { orb.tDist = clamp(orb.tDist * (1 + Math.sign(e.deltaY) * 0.1), 0.4, 200); e.preventDefault(); }, { passive: false });
+
+// ================= التبويبات =================
+$$('#tabs [data-t]').forEach(b => (b.onclick = () => {
+  $$('#tabs [data-t]').forEach(x => x.classList.toggle('on', x === b));
+  $$('#panels section').forEach(s => s.classList.toggle('on', s.id === b.dataset.t));
+  elSheet.classList.remove('min');
+}));
+$('#sheetToggle').onclick = () => elSheet.classList.toggle('min');
+
+// ================= التركيب والأرجل =================
+const LC = ['#ff6b6b', '#51cf66', '#4dabf7'];
+$$('.lk').forEach(b => (b.style.borderColor = LC[+b.dataset.lk]));
+function updLegLabels() {
+  $$('.lk').forEach(b => { const i = +b.dataset.lk, l = I.st.legLock[i]; b.textContent = (l ? '🔒 ' : '🔓 ') + (i + 1); b.classList.toggle('on', l); });
+  $$('.lgv').forEach(b => (b.textContent = (I.st.leg[+b.dataset.lv] * 1000).toFixed(1) + ' مم'));
+}
+function syncLegUI() {
+  $('#hSl').value = I.st.H; $('#hVal').textContent = I.st.H.toFixed(2) + ' م';
+  $$('.lg').forEach(s => (s.value = I.st.leg[+s.dataset.lg] * 1000));
+  updLegLabels();
+}
+function updClampUI() {
+  $('#btnClamp').textContent = I.st.clamp ? '🔒 المثبّت: مربوط' : '🔓 المثبّت: محرَّر'; $('#btnClamp').classList.toggle('on', I.st.clamp);
+  $('#btnClampV').textContent = I.st.clampV ? '🔒 رأسي' : '🔓 رأسي'; $('#btnClampV').classList.toggle('on', I.st.clampV);
+  I.setClamp(I.st.clamp);
+}
+function afterChange() {
+  syncLegUI(); updClampUI();
+  scopeEl.style.display = I.st.mounted ? 'block' : 'none';
+  $('#btnMountOnly').style.display = I.st.mounted ? 'none' : '';
+}
+function doMount() { if (I.st.mounted) return; I.mount(); afterChange(); toast('تم تركيب الجهاز. اضبط الأرجل ثم سوِّ البراغي'); }
+$('#btnMountOnly').onclick = doMount;
+$('#btnMount').onclick = () => { I.quickMount(); afterChange(); toast('تركيب فوري: الحامل بالارتفاع المناسب مربوط والجهاز مثبّت'); };
+$('#btnLevelNow').onclick = () => { I.quickLevel(); afterChange(); toast('موازنة فورية ✓'); };
+
+$$('.lk').forEach(b => (b.onclick = () => { const i = +b.dataset.lk; I.setLegLock(i, !I.st.legLock[i]); updLegLabels(); }));
+$$('.lg').forEach(s => (s.oninput = () => {
+  const i = +s.dataset.lg;
+  if (I.st.legLock[i]) { toast('حرّر بزال الساق ' + (i + 1) + ' أولاً'); s.value = I.st.leg[i] * 1000; return; }
+  I.setLeg(i, +s.value / 1000); updLegLabels();
+}));
+$('#hSl').oninput = e => {
+  if (I.st.legLock.some(Boolean)) { toast('حرّر بزال الأرجل الثلاثة أولاً'); e.target.value = I.st.H; return; }
+  I.setHeight(+e.target.value); $('#hVal').textContent = I.st.H.toFixed(2) + ' م';
+};
+$('#btnLegsLock').onclick = () => { const all = I.st.legLock.every(Boolean); [0, 1, 2].forEach(i => I.setLegLock(i, !all)); updLegLabels(); };
+$('#btnLegsLevel').onclick = () => { I.levelLegsNow(); syncLegUI(); toast('تمت موازنة الأرجل'); };
+$('#btnFine').onclick = () => { fine = !fine; $('#btnFine').textContent = '🎯 ضبط دقيق: ' + (fine ? 'تشغيل' : 'إيقاف'); $('#btnFine').classList.toggle('on', fine); };
+
+$('#btnExplode').onclick = () => {
+  if (!I.st.mounted) doMount();
+  const on = I.st.exTarget < 0.5;
+  I.setExplode(on); $('#btnExplode').classList.toggle('on', on);
+  setMode('inst', on ? 2.8 : 1.3);
+  if (on) openTab('t4');
+};
+
+// ================= نوع الجهاز =================
+let curParts = [];
+function buildPartLabels() {
+  lblBox.innerHTML = ''; $('#partsList').innerHTML = ''; $('#partInfo').innerHTML = '';
+  curParts = I.partsFor();
+  curParts.forEach((p, i) => {
+    const b = document.createElement('button'); b.className = 'lbl ' + (i % 2 ? 'r' : 'l'); b.textContent = p.name; b.onclick = () => showPart(p);
+    lblBox.appendChild(b); p.el = b;
+    const li = document.createElement('button'); li.textContent = p.name; li.onclick = () => showPart(p); $('#partsList').appendChild(li);
+  });
+}
+function showPart(p) {
+  if (!I.st.mounted) doMount();
+  if (I.st.exTarget < 0.5) { I.setExplode(true); $('#btnExplode').classList.add('on'); }
+  $$('.lbl').forEach(x => x.classList.toggle('sel', x === p.el));
+  $('#partInfo').innerHTML = `<h4>${p.name}</h4><p>${p.desc}</p>`;
+  orb.part = p; setMode('part', 1.3);
+}
+function applyInstType(t, quiet) {
+  CFG.inst = t; saveCfg(); I.setType(t); applyErr(); document.body.dataset.inst = t;
+  $('#cfgInst').value = t; $('#btnInst').textContent = '🔧 ' + I.TY().name;
+  fx.setMode(t === 'ts' ? 2 : t === 'tach' ? 1 : 0); setTarget(t === 'ts' ? 'prism' : 'staff');
+  buildPartLabels(); flags.read = flags.dist = flags.two = flags.orient = flags.face2 = false; stepKey = ''; lastMeas = '';
+  const act = $('#tabs button.on'); if (act && act.offsetParent === null) openTab('t1');
+  if (!quiet) placeInstrument(job.setups[job.cur] || { id: 'S1', x: 0, z: 0 }, true);
+  ttRender(); fbRender();
+  if (!quiet) toast('الجهاز: ' + I.TY().name);
+}
+$('#btnInst').onclick = () => { const o = ['level', 'theo', 'tach', 'ts']; applyInstType(o[(o.indexOf(I.type) + 1) % 4]); };
+
+// ================= نقل الجهاز / عالم جديد =================
+function placeInstrument(s, quiet) {
+  I.setRig(s.x, s.z); instPos.x = s.x; instPos.z = s.z;
+  I.reset(CFG.legs, CFG.state); faceInstrument(); afterChange();
+  flags.orient = false; lastMeas = ''; stepKey = '';
+  const tri = CFG.state === 'off';
+  setMode(tri ? 'tripod' : 'inst', tri ? 5.2 : 1.3); snapCam();
+  if (!quiet) toast('نُقل الجهاز إلى ' + s.id + ' — أعد ضبطه');
+}
+
+function onJobChanged() {
+  setMarkers(job.points, job.setups);
+  renderPtBtns(); renderMapList(); drawMap(); fbRender(); ttRender(); saveState();
+}
+
+function newWorld(sd) {
+  $('#loading').style.display = 'flex';
+  setTimeout(() => {
+    try { doNewWorld(sd); } catch (e) { showErr('world: ' + e.message); }
+    $('#loading').style.display = 'none';
+  }, 40);
+}
+let mapImg = null;
+function doNewWorld(sd) {
+  seed = sd; CFG.seed = String(sd); saveCfg();
+  regen(sd); mapImg = null;
+  const sv = loadSaved(sd);
+  job = sv ? sv.job : randomJob(sd); rows = sv ? (sv.rows || []) : []; rowsT = sv ? (sv.rowsT || []) : [];
+  if (job.E0 == null) { job.E0 = 1000; job.N0 = 1000; }
+  const cur = job.setups[job.cur] || job.setups[0] || { id: 'S1', x: 0, z: 0 };
+  if (!job.setups.length) job.setups = [cur];
+  I.setRig(cur.x, cur.z); instPos.x = cur.x; instPos.z = cur.z;
+  I.reset(CFG.legs, CFG.state);
+  const first = job.points.find(p => p.bm) || job.points[0];
+  if (first) placeHolderAt(first);
+  $('#cfgSeed').value = sd; setTxt('#seedLbl', String(sd)); setTxt('#mapSeed', String(sd));
+  applyInstType(CFG.inst, true);
+  afterChange(); onJobChanged();
+  const tri = CFG.state === 'off';
+  setMode(tri ? 'tripod' : 'inst', tri ? 5.2 : 1.3); snapCam();
+  toast('🌱 بذرة العالم: ' + sd);
+}
+const randSeed = () => Math.floor(Math.random() * 899999) + 100000;
+
+function newJob() {
+  job = randomJob(randSeed()); rows = []; rowsT = [];
+  placeInstrument(job.setups[0], true);
+  const first = job.points.find(p => p.bm) || job.points[0];
+  if (first) placeHolderAt(first);
+  onJobChanged(); toast('مهمة جديدة على نفس العالم');
+}
+
+// ================= الخريطة =================
+const HALF = 150, mapC = $('#mapC'), mctx = mapC.getContext('2d');
+let mapTool = 'pt', MS = 480;
+const w2m = (x, z) => [(x + HALF) / (2 * HALF) * MS, (z + HALF) / (2 * HALF) * MS];
+function sizeMap() {
+  const d = Math.min(devicePixelRatio || 1, 2);
+  MS = Math.floor(sideLayout() ? Math.min(innerWidth * 0.55, innerHeight * 0.78, 680) : Math.min(innerWidth * 0.94, innerHeight * 0.55, 560));
+  mapC.style.width = MS + 'px'; mapC.style.height = MS + 'px'; mapC.width = MS * d; mapC.height = MS * d; mctx.setTransform(d, 0, 0, d, 0, 0);
+}
+function openMap() { mapBox.style.display = 'block'; sizeMap(); drawMap(); renderMapList(); }
+function closeMap() { mapBox.style.display = 'none'; }
+$('#btnMap').onclick = openMap; $('#mapClose').onclick = closeMap;
+$('#btnMoveInst').onclick = () => { mapTool = 'inst'; $$('[data-mt]').forEach(b => b.classList.toggle('on', b.dataset.mt === mapTool)); openMap(); };
+$$('[data-mt]').forEach(b => (b.onclick = () => { mapTool = b.dataset.mt; $$('[data-mt]').forEach(x => x.classList.toggle('on', x === b)); }));
+$('#btnJobRnd').onclick = newJob;
+$('#btnWorldRnd').onclick = () => newWorld(randSeed());
+
+// ================= الخريطة: المعالم وتحريك النقاط وتثبيتها =================
+// NIVO-V8
+function drawMap() {
+  if (!mapOpen()) return;
+  if (!mapImg) mapImg = mapImage(HALF, 280);
+  const c = mctx, k = MS / (2 * HALF);
+  c.clearRect(0, 0, MS, MS); c.imageSmoothingEnabled = true; c.drawImage(mapImg.canvas, 0, 0, MS, MS);
+  c.lineWidth = 1; c.strokeStyle = 'rgba(255,255,255,.2)'; c.fillStyle = 'rgba(255,255,255,.75)'; c.font = '10px sans-serif'; c.textAlign = 'left';
+  for (let g = -Math.floor(HALF / 20) * 20; g <= HALF; g += 20) {
+    const gx = w2m(g, 0)[0], gy = w2m(0, g)[1];
+    c.beginPath(); c.moveTo(gx, 0); c.lineTo(gx, MS); c.moveTo(0, gy); c.lineTo(MS, gy); c.stroke();
+    c.fillText(String(g), gx + 2, MS - 3); c.fillText(String(g), 2, gy - 2);
+  }
+  c.fillStyle = '#fff'; c.font = 'bold 12px sans-serif'; c.fillText('N ↑  كنتور ' + mapImg.iv + ' م', MS - 92, 14);
+  const label = (t, x, y, col) => { c.font = 'bold 12px sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.strokeText(t, x + 8, y - 6); c.fillStyle = col; c.fillText(t, x + 8, y - 6); };
+  // معالم: أسهم جريان النهر + الجسر + المباني
+  const rp = riverPath();
+  c.fillStyle = 'rgba(255,255,255,.92)'; c.strokeStyle = '#1d4f8f'; c.lineWidth = 1;
+  for (let i = 6; i < rp.length - 3; i += 9) {
+    const a = rp[i], b = rp[i + 3];
+    if (Math.abs(a.x) > HALF || Math.abs(a.z) > HALF) continue;
+    const [ax, ay] = w2m(a.x, a.z), [bx, by] = w2m(b.x, b.z), an = Math.atan2(by - ay, bx - ax);
+    c.save(); c.translate(ax, ay); c.rotate(an); c.beginPath(); c.moveTo(7, 0); c.lineTo(-5, -5); c.lineTo(-5, 5); c.closePath(); c.fill(); c.stroke(); c.restore();
+  }
+  const br = bridgeInfo();
+  if (br) { const [bx, by] = w2m(br.x, br.z); c.save(); c.translate(bx, by); c.rotate(Math.atan2(br.uz, br.ux)); c.fillStyle = 'rgba(120,85,50,.95)'; c.fillRect(-br.hl * k, -br.hw * k, br.hl * 2 * k, br.hw * 2 * k); c.restore(); }
+  houseList().forEach(h => {
+    if (Math.abs(h.x) > HALF + 10 || Math.abs(h.z) > HALF + 10) return;
+    const [hx2, hy2] = w2m(h.x, h.z), s = Math.max(5, h.w * k);
+    c.fillStyle = 'rgba(80,60,50,.9)'; c.fillRect(hx2 - s / 2, hy2 - s / 2, s, s); c.strokeStyle = '#fff'; c.lineWidth = 1; c.strokeRect(hx2 - s / 2, hy2 - s / 2, s, s);
+  });
+  const [ix, iy] = w2m(instPos.x, instPos.z), gp = holder.group.position, [hx, hy] = w2m(gp.x, gp.z);
+  c.setLineDash([5, 4]); c.strokeStyle = 'rgba(255,150,40,.9)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(ix, iy); c.lineTo(hx, hy); c.stroke(); c.setLineDash([]);
+  job.setups.forEach((s, i) => {
+    const [x, y] = w2m(s.x, s.z), cur = i === job.cur, r = cur ? 9 : 6;
+    c.fillStyle = cur ? '#4dabf7' : 'rgba(77,171,247,.6)'; c.strokeStyle = '#fff'; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y); c.closePath(); c.fill(); c.stroke();
+    label(s.id, x, y, '#9fd0ff');
+    if (s.locked) { c.font = '12px sans-serif'; c.fillText('📌', x + 4, y + 16); }
+  });
+  job.points.forEach(p => {
+    const [x, y] = w2m(p.x, p.z);
+    c.lineWidth = 1.5; c.strokeStyle = '#fff';
+    if (p.bm) { c.fillStyle = '#2ea043'; c.beginPath(); c.moveTo(x, y - 8); c.lineTo(x + 8, y + 6); c.lineTo(x - 8, y + 6); c.closePath(); c.fill(); c.stroke(); }
+    else { c.fillStyle = '#e8402a'; c.beginPath(); c.arc(x, y, 6, 0, 7); c.fill(); c.stroke(); }
+    label(p.id, x, y, p.bm ? '#7ee787' : '#ffb3a6');
+    if (p.locked) { c.font = '12px sans-serif'; c.fillText('📌', x + 4, y + 16); }
+  });
+  c.fillStyle = '#ff9f43'; c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.beginPath(); c.arc(hx, hy, 4, 0, 7); c.fill(); c.stroke();
+}
+function reach(p) {
+  const g0 = groundH(instPos.x, instPos.z), d = Math.hypot(p.x - instPos.x, p.z - instPos.z);
+  if (isTT()) return { d, ok: d <= 90 };
+  const Rr = g0 + 1.5 + I.TY().trunH + 0.04 - groundH(p.x, p.z);
+  return { d, ok: Rr > 0.25 && Rr < 3.75 && d <= 80 };
+}
+function renderMapList() {
+  if (!mapOpen()) return;
+  const out = [];
+  job.points.forEach(p => {
+    const rc2 = reach(p), c = crd(p.x, p.z), wet = wetness(p.x, p.z) > 0.35;
+    out.push(`<div class="mrow"><span class="mi ${p.bm ? 'bm' : 'pt'}">${p.bm ? '▲' : '●'}</span><b>${p.id}</b>${p.locked ? '<span>📌</span>' : ''}<span class="mx">${p.bm ? `E ${c.E.toFixed(0)} N ${c.N.toFixed(0)}` : `${p.x}, ${p.z}`}</span>${p.bm ? `<input type="number" step="0.001" data-act="elev" data-id="${p.id}" value="${p.elev ?? ''}" placeholder="RL">` : ''}${wet ? '<span class="warn">💧 ضفة: أرض طرية</span>' : ''}<span class="${rc2.ok ? 'ok' : 'warn'}">${rc2.d.toFixed(0)} م ${rc2.ok ? '✓ ضمن المدى' : '⚠ خارج المدى'}</span><button data-act="staff" data-id="${p.id}">👷</button><button data-act="pin" data-id="${p.id}">${p.locked ? '🔓' : '📌'}</button><button data-act="del" data-id="${p.id}">🗑</button></div>`);
+  });
+  job.setups.forEach((s, i) => {
+    const c = crd(s.x, s.z), wet = wetness(s.x, s.z) > 0.35;
+    out.push(`<div class="mrow"><span class="mi st">◆</span><b>${s.id}</b>${s.locked ? '<span>📌</span>' : ''}<span class="mx">E ${c.E.toFixed(0)} N ${c.N.toFixed(0)}</span>${i === job.cur ? '<span class="ok">الحالي</span>' : ''}${wet ? '<span class="warn">💧 أرض طرية</span>' : ''}<button data-act="goto" data-id="${s.id}">🔭</button><button data-act="pin" data-id="${s.id}">${s.locked ? '🔓' : '📌'}</button><button data-act="delS" data-id="${s.id}">🗑</button></div>`);
+  });
+  $('#mapList').innerHTML = out.join('');
+}
+function sendStaff(p) {
+  if (sendTo(p)) toast('الهدف يتحرك نحو ' + p.id);
+  else if (holder.walking) toast('الهدف يتحرك بالفعل');
+  else toast('الهدف عند ' + p.id + ' بالفعل');
+  drawMap();
+}
+function delPoint(p) {
+  if (p.locked) return toast('📌 النقطة مثبّتة: ألغِ التثبيت أولاً');
+  job.points = job.points.filter(q => q !== p);
+  if (holder.station && holder.station.id === p.id) holder.station = null;
+  onJobChanged();
+}
+function delSetup(s) {
+  if (s.locked) return toast('📌 الموضع مثبّت: ألغِ التثبيت أولاً');
+  if (job.setups[job.cur] === s) return toast('لا يمكن حذف موضع الجهاز الحالي');
+  const cur = job.setups[job.cur]; job.setups = job.setups.filter(q => q !== s); job.cur = job.setups.indexOf(cur);
+  onJobChanged();
+}
+function gotoSetup(s) { job.cur = job.setups.indexOf(s); placeInstrument(s); onJobChanged(); }
+
+$('#mapList').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const id = b.dataset.id, act = b.dataset.act, p = ptById(id), s = setupById(id);
+  if (act === 'staff' && p) sendStaff(p);
+  else if (act === 'del' && p) delPoint(p);
+  else if (act === 'goto' && s) gotoSetup(s);
+  else if (act === 'delS' && s) delSetup(s);
+  else if (act === 'pin') { const t = p || s; if (t) { t.locked = !t.locked; onJobChanged(); } }
+});
+$('#mapList').addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.act !== 'elev') return;
+  const p = ptById(t.dataset.id), v = parseFloat(t.value);
+  if (p && Number.isFinite(v)) { p.elev = v; fbRefresh(); ttRefresh(); saveState(); drawMap(); }
+});
+
+// ---- سحب النقاط (أداة التحريك) ----
+const m2w = e => { const r = mapC.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * 2 * HALF - HALF, (e.clientY - r.top) / r.height * 2 * HALF - HALF]; };
+const nearOf = (arr, x, z, rad) => { let b = null, bd = rad; arr.forEach(q => { const d = Math.hypot(q.x - x, q.z - z); if (d < bd) { bd = d; b = q; } }); return b; };
+const nearAny = (x, z, rad) => {
+  const a = nearOf(job.points, x, z, rad), b = nearOf(job.setups, x, z, rad);
+  if (!a) return b; if (!b) return a;
+  return Math.hypot(a.x - x, a.z - z) <= Math.hypot(b.x - x, b.z - z) ? a : b;
+};
+const placeOk = (x, z, isPt) => !isWater(x, z) && (isPt || !inHouse(x, z));
+let mdrag = null;
+mapC.addEventListener('pointerdown', e => {
+  const [x, z] = m2w(e);
+  if (mapTool === 'move') {
+    const t = nearAny(x, z, 9);
+    if (!t) return toast('المس قرب نقطة أو موضع جهاز لتحريكه');
+    if (t.locked) return toast('📌 ' + t.id + ' مثبّتة: ألغِ التثبيت أولاً');
+    mdrag = { t, x0: t.x, z0: t.z }; cap(mapC, e.pointerId); return;
+  }
+  mapTap(x, z);
+});
+mapC.addEventListener('pointermove', e => {
+  if (!mdrag) return;
+  let [x, z] = m2w(e); x = Math.round(clamp(x, -(HALF - 4), HALF - 4)); z = Math.round(clamp(z, -(HALF - 4), HALF - 4));
+  if (!placeOk(x, z, 'bm' in mdrag.t)) return;
+  mdrag.t.x = x; mdrag.t.z = z; drawMap();
+});
+const endDrag = () => {
+  if (!mdrag) return;
+  const d = mdrag, t = d.t; mdrag = null;
+  if (t.x === d.x0 && t.z === d.z0) return;
+  if ('bm' in t) { if (holder.station && holder.station.id === t.id) placeHolderAt(t); toast('نُقلت ' + t.id + ' — أي قراءات سابقة عليها لم تعد صالحة'); }
+  else if (job.setups[job.cur] === t) { placeInstrument(t, true); toast('نُقل الجهاز إلى ' + t.id + ' وأُعيد ضبطه'); }
+  onJobChanged();
+};
+mapC.addEventListener('pointerup', endDrag); mapC.addEventListener('pointercancel', endDrag);
+
+function mapTap(x, z) {
+  x = Math.round(clamp(x, -(HALF - 4), HALF - 4)); z = Math.round(clamp(z, -(HALF - 4), HALF - 4));
+  if (mapTool === 'pt' || mapTool === 'bm') {
+    if (isWater(x, z)) return toast('💧 لا يمكن وضع نقطة داخل الماء');
+    if (nearOf(job.points, x, z, 4)) return toast('قريبة جداً من نقطة أخرى');
+    const bm = mapTool === 'bm', p = { id: nextId(bm ? 'BM' : 'P'), x, z, bm, elev: null };
+    if (bm) { const t = trueRL({ x, z }); p.elev = t === null ? 100 : Math.round(t * 1000) / 1000; }
+    job.points.push(p); onJobChanged();
+  } else if (mapTool === 'inst') {
+    if (isWater(x, z)) return toast('💧 لا يمكن وضع الجهاز داخل الماء (ضعه على الضفة أو الجسر)');
+    if (inHouse(x, z)) return toast('🏠 لا يمكن وضع الجهاز داخل مبنى');
+    const s0 = nearOf(job.setups, x, z, 6);
+    if (s0) gotoSetup(s0);
+    else { const s = { id: nextSetup(), x, z }; job.setups.push(s); gotoSetup(s); }
+  } else if (mapTool === 'staff') {
+    const p = nearOf(job.points, x, z, 10); if (p) sendStaff(p); else toast('المس قرب نقطة لإرسال الهدف إليها');
+  } else if (mapTool === 'del') {
+    const t = nearAny(x, z, 6);
+    if (!t) toast('لا توجد نقطة هنا'); else if ('bm' in t) delPoint(t); else delSetup(t);
+  } else if (mapTool === 'pin') {
+    const t = nearAny(x, z, 8);
+    if (!t) return toast('المس قرب نقطة أو موضع جهاز');
+    t.locked = !t.locked; toast(t.locked ? '📌 ثُبّتت ' + t.id : 'أُلغي تثبيت ' + t.id); onJobChanged();
+  }
+}
+function renderPtBtns() {
+  const box = $('#ptBtns'); box.innerHTML = '';
+  job.points.forEach(p => { const b = document.createElement('button'); b.textContent = p.id; b.dataset.id = p.id; b.onclick = () => sendStaff(p); box.appendChild(b); });
+  const sel = $('#bsSel'), old = sel.value;
+  sel.innerHTML = job.points.filter(p => p.bm).map(p => `<option value="${p.id}">BS: ${p.id}</option>`).join('');
+  if (old) sel.value = old;
+}
+
+// ================= الإعدادات (واجهة) =================
+$('#cfgInst').value = CFG.inst; $('#cfgLegs').value = CFG.legs; $('#cfgState').value = CFG.state;
+$('#cfgPat').value = CFG.pat; $('#cfgLab').value = CFG.lab; $('#cfgQ').value = CFG.q; $('#cfgUI').value = CFG.ui;
+$('#cfgFix').checked = !!CFG.fix; $('#cfgManual').checked = !!CFG.manual; $('#cfgExam').checked = !!CFG.exam;
+$('#cfgInst').onchange = e => applyInstType(e.target.value);
+$('#cfgLegs').onchange = e => { CFG.legs = e.target.value; saveCfg(); };
+$('#cfgState').onchange = e => { CFG.state = e.target.value; saveCfg(); };
+$('#cfgPat').onchange = e => { CFG.pat = e.target.value; saveCfg(); setStaffStyle(CFG.pat, CFG.lab); };
+$('#cfgLab').onchange = e => { CFG.lab = e.target.value; saveCfg(); setStaffStyle(CFG.pat, CFG.lab); };
+$('#cfgQ').onchange = e => { CFG.q = e.target.value; saveCfg(); setQuality(+CFG.q); resize(); };
+$('#cfgUI').onchange = e => { CFG.ui = e.target.value; saveCfg(); document.documentElement.style.setProperty('--k', CFG.ui); };
+$('#cfgFix').onchange = e => { CFG.fix = e.target.checked; saveCfg(); };
+$('#cfgManual').onchange = e => { CFG.manual = e.target.checked; saveCfg(); fbRender(); };
+$('#cfgExam').onchange = e => { CFG.exam = e.target.checked; saveCfg(); fbRender(); ttRender(); };
+$('#btnSeedApply').onclick = () => { const v = Math.floor(+$('#cfgSeed').value); if (!(v > 0)) return toast('اكتب رقماً صحيحاً أكبر من 0'); newWorld(v); };
+$('#btnSeedRnd').onclick = () => newWorld(randSeed());
+$('#btnRestart').onclick = () => { placeInstrument(job.setups[job.cur] || { x: 0, z: 0, id: 'S1' }, true); toast('تمت إعادة ضبط الجهاز'); };
+$('#btnLegsLevel2').onclick = $('#btnLegsLevel').onclick;
+$('#btnScrewsNow').onclick = () => { if (!I.st.mounted) doMount(); I.levelScrewsNow(); toast('تمت موازنة البراغي'); };
+
+// ---- أخطاء الجهاز ----
+$('#cfgErr').checked = !!CFG.err; $('#cfgErrK').value = String(CFG.errK);
+const applyErr = () => { I.setErrors(CFG.err, +CFG.errK, seed); setStaffZero(I.staffZero()); };
+$('#cfgErr').onchange = e => { CFG.err = e.target.checked; saveCfg(); applyErr(); ttRefresh(); toast(CFG.err ? 'أخطاء الجهاز: تشغيل' : 'أخطاء الجهاز: إيقاف'); };
+$('#cfgErrK').onchange = e => { CFG.errK = +e.target.value; saveCfg(); applyErr(); toast('حجم الأخطاء ×' + CFG.errK); };
+$('#btnErrShow').onclick = () => { $('#errInfo').textContent = I.errReport().join('\n'); };
+
+$('#cfgVeg').value = String(CFG.veg);
+$('#cfgVeg').onchange = e => { CFG.veg = +e.target.value; saveCfg(); setVegDensity(CFG.veg); newWorld(seed); toast('كثافة الأشجار: ' + e.target.selectedOptions[0].text); };
+
+async function lanRefresh(tries = 4) {
+  for (let i = 0; i < tries; i++) {
+    try { const j = await (await fetch('/api/lan', { cache: 'no-store' })).json(); showLan(j); return; }
+    catch (e) { await new Promise(r => setTimeout(r, 500)); }
+  }
+}
+function showLan(j) {
+  const b = $('#btnLan');
+  b.textContent = j.on ? '🟢 مفعّلة — اضغط للإيقاف' : '⚪ معطّلة — اضغط للتفعيل';
+  b.classList.toggle('on', j.on); b.disabled = !j.canToggle;
+  let t = '';
+  if (j.on) t = (j.urls.length ? j.urls.join('\n') : `اكتب عنوان IP جهازك (من إعدادات الواي فاي) ثم :${j.port}`) + '\n⚠ أي جهاز على نفس الشبكة يقدر يفتحها. فعّلها على شبكة تثق بها.';
+  else if (!j.canToggle) t = 'التبديل متاح فقط من الجهاز الذي يشغّل السيرفر.';
+  $('#lanInfo').textContent = t;
+}
+$('#btnLan').onclick = async () => {
+  const on = !$('#btnLan').classList.contains('on');
+  try { await fetch('/api/lan?on=' + (on ? 1 : 0), { cache: 'no-store' }); } catch (e) { /* قد ينقطع الاتصال لحظياً */ }
+  setTimeout(() => lanRefresh(6), 700);
+};
+
+// ================= التسوية (لوحة البراغي) =================
+const lv = $('#lv'), lc = lv.getContext('2d'), LS = 300;
+const KN = [{ x: 59, y: 202 }, { x: 241, y: 202 }, { x: 150, y: 45 }], NAMES = ['A', 'B', 'C'];
+(function () { const d = Math.min(devicePixelRatio || 1, 2); lv.width = LS * d; lv.height = LS * d; lc.setTransform(d, 0, 0, d, 0, 0); })();
+
+function drawLevel() {
+  const c = lc, T = I.getTilt(), ty = I.TY(), kind = I.type, h = I.st.heading, ax = Math.sin(h), ay = -Math.cos(h);
+  c.clearRect(0, 0, LS, LS);
+  c.strokeStyle = '#33425a'; c.lineWidth = 4; c.beginPath();
+  KN.forEach((k, i) => (i ? c.lineTo(k.x, k.y) : c.moveTo(k.x, k.y))); c.closePath(); c.stroke();
+  if (kind === 'theo' || kind === 'tach') {
+    const b = (T.gx * Math.cos(h) + T.gz * Math.sin(h)) * 3437.75, half = 75, k = half / ty.vial;
+    c.save(); c.translate(150, 150); c.rotate(h);
+    c.fillStyle = '#0d2a22'; c.fillRect(-half, -14, 2 * half, 28); c.strokeStyle = '#5fd6b0'; c.lineWidth = 2; c.strokeRect(-half, -14, 2 * half, 28);
+    for (let t = -4; t <= 4; t++) { c.strokeStyle = 'rgba(255,255,255,.25)'; c.lineWidth = 1; c.beginPath(); c.moveTo(t * k, -14); c.lineTo(t * k, -8); c.stroke(); }
+    c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.moveTo(-ty.ring * k, -14); c.lineTo(-ty.ring * k, 14); c.moveTo(ty.ring * k, -14); c.lineTo(ty.ring * k, 14); c.stroke();
+    c.fillStyle = 'rgba(190,255,225,.9)'; c.beginPath(); c.ellipse(clamp(b * k, -half + 16, half - 16), 0, 16, 9, 0, 0, 7); c.fill();
+    c.restore();
+  } else {
+    const k = 70 / (ty.vial / 3437.75);
+    c.fillStyle = '#0d2a22'; c.beginPath(); c.arc(150, 150, 70, 0, 7); c.fill();
+    c.strokeStyle = '#5fd6b0'; c.lineWidth = 2; c.stroke();
+    c.setLineDash([4, 4]); c.strokeStyle = '#e6c84c'; c.beginPath(); c.arc(150, 150, 70 * ty.comp / ty.vial, 0, 7); c.stroke(); c.setLineDash([]);
+    c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(150, 150, 70 * ty.ring / ty.vial, 0, 7); c.stroke();
+    c.strokeStyle = 'rgba(255,159,67,.9)'; c.lineWidth = 3; c.beginPath();
+    c.moveTo(150 - ax * 66, 150 - ay * 66); c.lineTo(150 + ax * 66, 150 + ay * 66); c.stroke();
+    let bx = T.gx * k, by = T.gz * k; const L = Math.hypot(bx, by);
+    if (L > 61) { bx *= 61 / L; by *= 61 / L; }
+    c.fillStyle = 'rgba(190,255,225,.9)'; c.beginPath(); c.arc(150 + bx, 150 + by, 9, 0, 7); c.fill();
+  }
+  c.fillStyle = '#ff9f43'; c.beginPath();
+  c.moveTo(150 + ax * 80, 150 + ay * 80); c.lineTo(150 + ax * 64 - ay * 7, 150 + ay * 64 + ax * 7); c.lineTo(150 + ax * 64 + ay * 7, 150 + ay * 64 - ax * 7); c.fill();
+  KN.forEach((k, i) => {
+    c.fillStyle = '#c9ced6'; c.beginPath(); c.arc(k.x, k.y, 30, 0, 7); c.fill();
+    c.strokeStyle = '#5b6573'; c.lineWidth = 3; c.stroke();
+    const a = I.st.e[i] / I.PITCH * 2 * Math.PI;
+    c.strokeStyle = '#d33'; c.lineWidth = 4; c.beginPath();
+    c.moveTo(k.x + Math.cos(a) * 17, k.y + Math.sin(a) * 17); c.lineTo(k.x + Math.cos(a) * 28, k.y + Math.sin(a) * 28); c.stroke();
+    c.fillStyle = '#2a2f38'; c.beginPath(); c.arc(k.x, k.y, 14, 0, 7); c.fill();
+    c.fillStyle = '#fff'; c.font = 'bold 15px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(NAMES[i], k.x, k.y + 1);
+    if (I.st.e[i] <= 0 || I.st.e[i] >= I.EMAX) { c.fillStyle = '#ff7b72'; c.font = '11px sans-serif'; c.fillText('نهاية', k.x, k.y + (i === 2 ? -40 : 42)); }
+  });
+  c.fillStyle = '#778'; c.font = '11px sans-serif'; c.textAlign = 'center'; c.fillText('شمال ↑', 150, 12);
+  if (!I.st.mounted) { c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(0, 0, LS, LS); c.fillStyle = '#fff'; c.font = '16px sans-serif'; c.fillText('ركّب الجهاز أولاً', 150, 150); }
+}
+
+const hv = $('#hv'), hc = hv.getContext('2d');
+(function () { const d = Math.min(devicePixelRatio || 1, 2); hv.width = 180 * d; hv.height = 180 * d; hc.setTransform(d, 0, 0, d, 0, 0); })();
+function drawHead() {
+  const c = hc, st = I.st, k = 48 / 0.05236;
+  c.clearRect(0, 0, 180, 180);
+  I.LEGA.forEach((a, i) => {
+    const x = 90 + Math.cos(a) * 74, y = 90 + Math.sin(a) * 74;
+    c.strokeStyle = '#33425a'; c.lineWidth = 3; c.beginPath(); c.moveTo(90, 90); c.lineTo(x, y); c.stroke();
+    c.fillStyle = LC[i]; c.beginPath(); c.arc(x, y, 13, 0, 7); c.fill();
+    c.fillStyle = '#000'; c.font = 'bold 14px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(i + 1), x, y + 1);
+  });
+  c.fillStyle = '#0d2a22'; c.beginPath(); c.arc(90, 90, 48, 0, 7); c.fill();
+  c.strokeStyle = '#5fd6b0'; c.lineWidth = 2; c.stroke();
+  c.setLineDash([4, 4]); c.strokeStyle = '#e6c84c'; c.beginPath(); c.arc(90, 90, 48 * 1.5 / 3, 0, 7); c.stroke(); c.setLineDash([]);
+  c.strokeStyle = '#fff'; c.beginPath(); c.arc(90, 90, 48 * 0.5 / 3, 0, 7); c.stroke();
+  let bx = st.tx * k, by = st.tz * k; const L = Math.hypot(bx, by);
+  if (L > 40) { bx *= 40 / L; by *= 40 / L; }
+  c.fillStyle = 'rgba(190,255,225,.9)'; c.beginPath(); c.arc(90 + bx, 90 + by, 7, 0, 7); c.fill();
+}
+
+const drag = new Map();
+const lvPos = e => { const r = lv.getBoundingClientRect(), s = LS / (r.width || LS); return { x: (e.clientX - r.left) * s, y: (e.clientY - r.top) * s }; };
+lv.addEventListener('pointerdown', e => {
+  if (!I.st.mounted) return;
+  const p = lvPos(e); let bi = -1, bd = 1e9;
+  KN.forEach((k, i) => { const d = Math.hypot(p.x - k.x, p.y - k.y); if (d < bd) { bd = d; bi = i; } });
+  if (bd > 50) return;
+  cap(lv, e.pointerId);
+  drag.set(e.pointerId, { i: bi, a: Math.atan2(p.y - KN[bi].y, p.x - KN[bi].x) });
+});
+lv.addEventListener('pointermove', e => {
+  const d = drag.get(e.pointerId); if (!d) return;
+  const p = lvPos(e), a = Math.atan2(p.y - KN[d.i].y, p.x - KN[d.i].x);
+  const da = wrapPi(a - d.a); d.a = a;
+  if (!Number.isFinite(da)) return;
+  if (!I.turnScrew(d.i, da / TAU * (fine ? 0.1 : 1))) toast('وصل البرغي نهاية مداه — أعِد باقي البراغي لمنتصف مداها');
+});
+const dEnd = e => drag.delete(e.pointerId); lv.addEventListener('pointerup', dEnd); lv.addEventListener('pointercancel', dEnd);
+$$('[data-sc]').forEach(b => (b.onclick = () => {
+  if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+  const [i, d] = b.dataset.sc.split(',');
+  if (!I.turnScrew(+i, +d * (fine ? 1 / 40 : 0.125))) toast('وصل البرغي نهاية مداه');
+}));
+
+// ================= التوجيه (دوران أفقي لا نهائي + رأسي) =================
+function setHeading(r) { if (Number.isFinite(r)) I.st.heading = ((r % TAU) + TAU) % TAU; }
+function setVz(r) { if (Number.isFinite(r)) I.st.vz = ((r % TAU) + TAU) % TAU; }
+const bearingToStaff = () => { const p = holder.group.position; return Math.atan2(p.x - instPos.x, -(p.z - instPos.z)); };
+$('#btnClamp').onclick = () => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); I.st.clamp = !I.st.clamp; updClampUI(); };
+$('#btnClampV').onclick = () => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); I.st.clampV = !I.st.clampV; updClampUI(); };
+
+const jog = $('#jog'); let jd = null;
+jog.addEventListener('pointerdown', e => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); jd = { x: e.clientX }; cap(jog, e.pointerId); });
+jog.addEventListener('pointermove', e => {
+  if (!jd) return;
+  const dx = e.clientX - jd.x; jd.x = e.clientX;
+  if (I.st.clamp) { if (Math.abs(dx) > 4) toast('حرّر المثبّت أولاً (أو استعمل الحركة البطيئة)'); return; }
+  setHeading(I.st.heading - dx * 0.5 * DEG);
+});
+const jEnd = () => (jd = null); jog.addEventListener('pointerup', jEnd); jog.addEventListener('pointercancel', jEnd);
+$$('[data-rot]').forEach(b => (b.onclick = () => {
+  if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+  if (I.st.clamp) return toast('حرّر المثبّت أولاً');
+  setHeading(I.st.heading + (+b.dataset.rot) * DEG);
+}));
+$$('[data-vr]').forEach(b => (b.onclick = () => {
+  if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+  if (I.st.clampV) return toast('حرّر المثبّت الرأسي أولاً');
+  setVz(I.st.vz - (+b.dataset.vr) * DEG);
+}));
+
+$('#btnAim').onclick = () => {
+  if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+  if (I.st.clamp || (isTT() && I.st.clampV)) return toast('حرّر المثبّت' + (isTT() ? 'ين' : '') + ' أولاً');
+  if (holder.walking) return toast('انتظر حتى يصل الهدف');
+  if (isTT()) {
+    const g = holder.group.position, dx = g.x - instPos.x, dz = g.z - instPos.z, hd = Math.hypot(dx, dz);
+    const ty = g.y + (I.type === 'ts' ? getPrismHeight() : 1.5) - scopeCam.position.y;
+    const phi = Math.PI / 2 - Math.atan2(ty, hd) + (Math.random() - 0.5) * 0.009, th = Math.atan2(dx, -dz) + (Math.random() - 0.5) * 0.009;
+    if (I.st.vz > Math.PI) { setHeading(th + Math.PI); setVz(TAU - phi); } else { setHeading(th); setVz(phi); }
+  } else setHeading(bearingToStaff() + (Math.random() - 0.5) * 0.012);
+  const rc2 = holder.station ? reach(holder.station) : null;
+  toast(rc2 && !rc2.ok ? 'تنبيه: هذه النقطة خارج المدى من هذا الموضع — انقل الجهاز' : 'تم التوجيه التقريبي. اربط المثبّت ثم أتقن بالحركة البطيئة');
+};
+
+let slow = 0, slowT = 0, slowV = 0, slowVT = 0;
+[['slL', -1], ['slR', 1]].forEach(([id, dir]) => {
+  const b = $('#' + id); b.oncontextmenu = e => e.preventDefault();
+  b.addEventListener('pointerdown', e => {
+    if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+    if (!I.st.clamp) return toast('اربط المثبّت أولاً لتفعيل الحركة البطيئة');
+    cap(b, e.pointerId);
+    setHeading(I.st.heading + dir * 0.01 * DEG); slow = dir; slowT = 0;
+  });
+  const stop = () => { slow = 0; };
+  b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop); b.addEventListener('lostpointercapture', stop);
+});
+[['slU', -1], ['slD', 1]].forEach(([id, dir]) => {
+  const b = $('#' + id); b.oncontextmenu = e => e.preventDefault();
+  b.addEventListener('pointerdown', e => {
+    if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+    if (!I.st.clampV) return toast('اربط المثبّت الرأسي أولاً');
+    cap(b, e.pointerId);
+    setVz(I.st.vz + dir * 0.01 * DEG); slowV = dir; slowVT = 0;
+  });
+  const stop = () => { slowV = 0; };
+  b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop); b.addEventListener('lostpointercapture', stop);
+});
+let keyDir = 0;
+addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (mapOpen()) closeMap(); else if (scopeFull) toggleFull(false); return; }
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  if (e.repeat || !I.st.mounted) return;
+  if (!I.st.clamp) return toast('اربط المثبّت لاستعمال الحركة البطيئة');
+  keyDir = e.key === 'ArrowRight' ? 1 : -1; slow = keyDir; slowT = 0; setHeading(I.st.heading + keyDir * 0.01 * DEG);
+});
+addEventListener('keyup', e => { if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && keyDir) { keyDir = 0; slow = 0; } });
+
+$('#foc').oninput = e => (focV = +e.target.value);
+$('#eye').oninput = e => (eyeV = +e.target.value);
+
+function toggleFull(on) {
+  scopeFull = on; scopeEl.classList.toggle('full', on);
+  $('#btnExit').style.display = on ? 'block' : 'none';
+  if (on) openTab('t2');
+}
+$('#btnFull').onclick = () => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); toggleFull(true); };
+$('#btnExit').onclick = () => toggleFull(false);
+let sd = null;
+scopeEl.addEventListener('pointerdown', e => { if (!scopeFull) { toggleFull(true); return; } sd = { x: e.clientX, y: e.clientY }; cap(scopeEl, e.pointerId); });
+scopeEl.addEventListener('pointermove', e => {
+  if (!sd) return;
+  const dx = e.clientX - sd.x, dy = e.clientY - sd.y, w = scopeEl.getBoundingClientRect().width || 300; sd.x = e.clientX; sd.y = e.clientY;
+  if (I.st.clamp) { if (Math.abs(dx) > 6) toast('المثبّت مربوط: استعمل الحركة البطيئة'); }
+  else setHeading(I.st.heading - dx / w * FOV * DEG);
+  if (isTT()) { if (I.st.clampV) { if (Math.abs(dy) > 6) toast('المثبّت الرأسي مربوط'); } else setVz(I.st.vz - dy / w * FOV * DEG); }
+});
+const sdEnd = () => (sd = null); scopeEl.addEventListener('pointerup', sdEnd); scopeEl.addEventListener('pointercancel', sdEnd);
+
+// ---- أدوات التيودوليت والتاكيومتر ----
+$('#btn0Set').onclick = () => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); I.st.hz0 = I.st.heading; toast('Hz = 0°00′00″'); };
+$('#btnPlunge').onclick = () => {
+  if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+  if (I.st.clamp || I.st.clampV) return toast('حرّر المثبّتين (الأفقي والرأسي) أولاً');
+  setHeading(I.st.heading + Math.PI); setVz(TAU - I.st.vz);
+  toast('قُلب المنظار: الوجه ' + (I.st.vz < Math.PI ? 'I' : 'II'));
+};
+$('#btnHI').onclick = () => {
+  if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
+  const hi = scopeCam.position.y - I.rigPos.y;
+  $('#inHI').value = (Math.round((hi + (Math.random() - 0.5) * 0.004) * 1000) / 1000).toFixed(3);
+  toast('ارتفاع الجهاز المقاس i = ' + $('#inHI').value + ' م (بالشريط)');
+};
+$('#inHr').oninput = e => { const v = numOrNull(e.target.value); if (v !== null) setPrismHeight(v); };
+
+// ================= النظر في الهدف =================
+const rc = new THREE.Raycaster(), _o = new V3(), _d = new V3(), _r = new V3(), _p = new V3(), _t = new V3();
+let S = { hit: false, dist: 70, ang: 9 };
+function sightInfo() {
+  const s = { hit: false, dist: 70, ang: 9 };
+  if (!I.st.mounted || holder.walking) return s;
+  scopeCam.updateMatrixWorld(true);
+  scopeCam.getWorldPosition(_o); scopeCam.getWorldDirection(_d);
+  const g = holder.group, gy = g.position.y, ts = I.type === 'ts', face = ts ? prismFace : holder.face;
+  g.updateMatrixWorld(true);
+  s.dist = Math.hypot(g.position.x - _o.x, g.position.z - _o.z);
+  _t.set(g.position.x - _o.x, gy + (ts ? getPrismHeight() : 1.5) - _o.y, g.position.z - _o.z).normalize();
+  s.ang = Math.acos(clamp(_t.dot(_d), -1, 1));
+  rc.set(_o, _d); rc.far = 400;
+  const h = rc.intersectObject(face, false)[0];
+  if (!h) return s;
+  const lp = g.worldToLocal(_p.copy(h.point));
+  s.hit = true; const rdg = pt => face.worldToLocal(_t.copy(pt)).y + 2; s.reading = ts ? h.point.y - gy : rdg(h.point); s.lat = lp.x; s.sd = h.distance; s.alpha = Math.asin(clamp(_d.y, -1, 1));
+  s.edm = ts && Math.abs(lp.x) < 0.07 && Math.abs(lp.y - getPrismHeight()) < 0.07;
+  if (!ts) {
+    _r.set(1, 0, 0).applyQuaternion(scopeCam.quaternion);
+    const sp = I.type === 'tach' ? 1 - _d.y * _d.y : 1, a = Math.atan(0.005 * sp);
+    rc.set(_o, _d.clone().applyAxisAngle(_r, a)); const hu = rc.intersectObject(face, false)[0];
+    rc.set(_o, _d.clone().applyAxisAngle(_r, -a)); const hl = rc.intersectObject(face, false)[0];
+    if (hu && hl) { s.U = rdg(hu.point); s.L = rdg(hl.point); s.D = 100 * (s.U - s.L); }
+    if (I.type === 'tach') { rc.set(_o, _d.clone().applyAxisAngle(_r, -0.001749)); const hs_ = rc.intersectObject(face, false)[0]; if (hs_) s.sr = rdg(hs_.point); }
+  }
+  return s;
+}
+
+// ================= الخطوات =================
+const flags = { height: false, headLevel: false, legsLock: false, mounted: false, level: false, rough: false, aim: false, eye: false, focus: false, read: false, dist: false, two: false, orient: false, face2: false };
+const S_COMMON = [
+  ['height', 'اضبط ارتفاع الحامل بمستوى الصدر (1.30 – 1.60 م)', 'حرّر بزال الأرجل (🔓) ثم حرّك مزلاج «ارتفاع الحامل» حتى يصبح رأس الحامل بمستوى الصدر.'],
+  ['headLevel', 'سوِّ رأس الحامل تقريباً بأطوال الأرجل (ميلان ≤ 0.5°)', 'انظر كمانة الرأس: الفقاعة تتجه نحو الساق الأعلى؛ قصّرها أو طوّل المقابلة بمقدار مليمترات (1 مم ≈ 0.5°).'],
+  ['legsLock', 'اربط بزال الأرجل الثلاثة', 'اضغط الأقفال 🔓 لتصبح 🔒 بعد الضبط، كي لا تنزلق الأرجل.'],
+  ['mounted', 'ركّب الجهاز على الحامل وثبّته بالمسمار المركزي', 'اضغط «ركّب الجهاز» (أو «تركيب فوري»).']
+];
+const STEPS_L = [...S_COMMON,
+  ['level', 'سوِّ الجهاز بالبراغي الثلاثة حتى تدخل الفقاعة الدائرة البيضاء الصغيرة', 'اجعل السهم البرتقالي أفقياً (المنظار موازٍ للخط بين A وB). أدِر A وB بعكس بعضهما: تتحرك الفقاعة باتجاه الإبهام الأيسر. ثم دوّر الجهاز 90° وحرّك C وحده.'],
+  ['rough', 'حرّر المثبّت ووجّه المنظار نحو الميرا بالمنظار الأولي', 'في تبويب المسح: المثبّت محرَّر، ثم «توجيه بالمنظار الأولي» أو اسحب شريط الدوران الأفقي.'],
+  ['aim', 'اربط المثبّت وأتقن التوجيه بالحركة البطيئة لتنصّف الشعيرة الرأسية الميرا', 'اربط المثبّت ثم اضغط ↺ ↻ ضغطات قصيرة حتى تقع الشعيرة الرأسية على منتصف الميرا.'],
+  ['eye', 'اضبط العدسة العينية حتى تصبح الشعيرات حادّة', 'حرّك مزلاج «العدسة العينية» حتى تصير الشعيرات سوداء ورفيعة.'],
+  ['focus', 'بئّر الصورة حتى يصبح تدريج الميرا واضحاً', 'حرّك مزلاج «التبئير» حتى تتضح الأرقام والأشرطة (جرّب المنظار بكامل الشاشة).'],
+  ['read', 'اقرأ الميرا وأضف القراءة للدفتر (BS على الـBM أولاً)', 'اختر النوع (BS للنقطة المعلومة)، اكتب قراءتك بالمتر ثم «➕ للدفتر». كل شريط = 1 سم، وقدّر الملّيمتر.'],
+  ['dist', 'اقرأ الشعيرتين العليا والسفلى واحسب المسافة', 'المسافة = 100 × (قراءة العليا − قراءة السفلى). اكتبها في خانة المسافة قبل «➕ للدفتر».'],
+  ['two', 'سجّل قراءات على نقطتين مختلفتين على الأقل واحسب المنسوب', 'بعد BS على الـBM أرسل الميرا إلى نقطة أخرى (أو انقل الجهاز) وأضف IS/FS، ثم افتح 📒 الدفتر وراجع RL والخطأ.']
+];
+const STEPS_T = [...S_COMMON,
+  ['level', 'سوِّ الجهاز بالكمانة الأنبوبية حتى ≤ 30″ في كل الاتجاهات', 'وجّه الكمانة موازية لبرغيَّين (السهم البرتقالي عمودي على الكمانة)، أدِر البرغيَّين بعكس بعضهما حتى تتمركز. ثم دوّر الجهاز 90° وحرّك البرغي الثالث. فعّل «الضبط الدقيق» وتأكد بعد تدوير 180°.'],
+  ['rough', 'وجّه المنظار نحو الميرا بالمنظار الأولي', 'حرّر المثبّتين ثم اضغط «توجيه بالمنظار الأولي» أو استعمل الدوران الأفقي والرأسي.'],
+  ['aim', 'اربط المثبّتين الأفقي والرأسي وانصّف الميرا بالحركة البطيئة', 'اربط المثبّتين ثم ↺ ↻ للأفقي و▲ ▼ للرأسي بضغطات قصيرة حتى تقع الشعيرة الرأسية على الميرا.'],
+  ['eye', 'اضبط العدسة العينية حتى تصبح الشعيرات حادّة', 'حرّك مزلاج «العدسة العينية».'],
+  ['focus', 'بئّر الصورة حتى يتضح تدريج الميرا', 'حرّك مزلاج «التبئير».'],
+  ['read', 'قِس ارتفاع الجهاز i ثم اقرأ U/M/L وسجّل (Hz وV تُسجَّل تلقائياً)', 'اضغط «📏 قياس ارتفاع الجهاز»، ثم اقرأ الميرا عند الشعيرة العليا والوسطى والسفلى واكتبها ثم «➕ تسجيل».'],
+  ['face2', 'اقلب المنظار (الوجه II) وأعد القياس على نفس النقطة', 'حرّر المثبّتين، «🔄 قلب المنظار»، أعد التوجيه والتسجيل. قراءة V في الوجه II = 360° − Z.'],
+  ['two', 'سجّل نقطتين مختلفتين وقارن الزاوية الأفقية بينهما', 'استعمل «0SET» على المرجع ثم وجّه إلى النقطة الثانية. يعرض تبويب 📐 الزاوية والخطأ.']
+];
+const STEPS_S = [...S_COMMON,
+  ['level', 'سوِّ الجهاز على الشاشة (ميلان ≤ 1′، والمعوّض يعمل ضمن ±3′)', 'أدِر البراغي كما في النيفو، وفعّل «الضبط الدقيق». الدائرة البيضاء = 1′ والمتقطعة = ±3′.'],
+  ['orient', 'اضبط الاتجاه: وجّه إلى BS معلوم واضغط «🧭 ضبط الاتجاه»', 'أرسل المنشور إلى BM، وجّه الشعيرة إلى منتصف المنشور (اربط المثبّتين) ثم «🧭 ضبط الاتجاه» ليصبح Hz = السمت.'],
+  ['rough', 'وجّه المنظار نحو المنشور', 'حرّر المثبّتين ثم «توجيه بالمنظار الأولي».'],
+  ['aim', 'اربط المثبّتين وانصّف المنشور بدقة', 'الشعيرتان على منتصف المنشور (الدائرة الداكنة) حتى تعمل EDM.'],
+  ['eye', 'اضبط العدسة العينية حتى تصبح الشعيرات حادّة', 'حرّك مزلاج «العدسة العينية».'],
+  ['focus', 'بئّر الصورة', 'حرّك مزلاج «التبئير».'],
+  ['read', 'قِس ارتفاع الجهاز i واضبط hr ثم «📏 قياس وحفظ»', 'اضغط «📏 قياس ارتفاع الجهاز»، واكتب ارتفاع العاكس hr (يتغير طول القطب)، ثم «📏 قياس وحفظ».'],
+  ['two', 'قِس نقطتين مختلفتين وراجع الإحداثيات والخطأ', 'أرسل المنشور إلى نقطة أخرى، وجّه وقِس. افتح 📐 قياس لترى N وE وZ والخطأ بالمليمتر.']
+];
+const STEPS_C = [...S_COMMON,
+  ['level', 'سوِّ الجهاز بالكمانة الأنبوبية حتى ≤ 30″ في كل الاتجاهات', 'وجّه الكمانة موازية لبرغيَّين، أدِر البرغيَّين بعكس بعضهما، ثم دوّر الجهاز 90° وحرّك الثالث. فعّل «الضبط الدقيق».'],
+  ['rough', 'وجّه المنظار نحو الميرا بالمنظار الأولي', 'حرّر المثبّتين ثم «توجيه بالمنظار الأولي» أو الدوران الأفقي والرأسي.'],
+  ['aim', 'اربط المثبّتين وانصّف الميرا بالحركة البطيئة', 'اربط المثبّتين ثم ↺ ↻ و▲ ▼ بضغطات قصيرة حتى تقع الشعيرة الرأسية على الميرا.'],
+  ['eye', 'اضبط العدسة العينية حتى تصبح الشعيرات حادّة', 'حرّك مزلاج «العدسة العينية».'],
+  ['focus', 'بئّر الصورة حتى يتضح تدريج الميرا', 'حرّك مزلاج «التبئير».'],
+  ['read', 'مركِز كمانة V ثم اقرأ Hz وV وق ع وق و وق س وS وK وسجّل', 'D = (ق ع − ق س)×100 = (ق ع − ق و)×200 (الاختزال آلي). ΔH = (ق ع − ق و)×K + J − S: J ارتفاع الجهاز وS قراءة شعيرة التصويب (القصيرة تحت المنتصف). K النظري يظهر تحت الخانات.'],
+  ['face2', 'اقلب المنظار (الوجه II) وأعد القياس على نفس النقطة', 'حرّر المثبّتين، «🔄 قلب المنظار»، مركِز كمانة V من جديد وأعد القراءة. i = (V1 + V2 − 360°)/2.'],
+  ['two', 'سجّل نقطتين مختلفتين وقارن الزاوية الأفقية بينهما', 'استعمل «0SET» على المرجع ثم وجّه إلى النقطة الثانية. يعرض تبويب 📐 الزاوية والخطأ.']
+];
+const curSteps = () => ({ level: STEPS_L, theo: STEPS_T, tach: STEPS_C, ts: STEPS_S })[I.type];
+let stepKey = '';
+function renderSteps() {
+  const st = curSteps(), k = I.type + st.map(s => (flags[s[0]] ? 1 : 0)).join('');
+  if (k === stepKey) return; stepKey = k;
+  $('#steps').innerHTML = st.map((s, i) => `<div class="st ${flags[s[0]] ? 'done' : ''}">${flags[s[0]] ? '✅' : '⬜'} ${i + 1}. ${s[1]}</div>`).join('');
+}
+$('#btnHint').onclick = () => { const s = curSteps().find(q => !flags[q[0]]); $('#hint').textContent = s ? '💡 ' + s[2] : '🎉 أكملت كل الخطوات!'; };
+
+// ================= دفتر مناسيب النيفو =================
+const fbRoot = $('#fb');
+const newRow = pt => ({ pt, bs: null, is: null, fs: null, uhi: null, url: null, rem: '', tr: {}, d: {} });
+
+function fbCompute() {
+  let HI = null; const rlMap = {}, out = [];
+  rows.forEach(r => {
+    const p = ptById(r.pt), known = p && p.bm && p.elev != null ? p.elev : null;
+    const sight = r.fs != null ? r.fs : r.is != null ? r.is : null;
+    const o = { rl: null, hi: null, calc: null, miscl: null, tru: p ? trueRL(p) : null, err: null };
+    if (HI !== null && sight !== null) o.calc = HI - sight;
+    if (known !== null) { o.rl = known; if (o.calc !== null) o.miscl = (o.calc - known) * 1000; }
+    else if (o.calc !== null) o.rl = o.calc;
+    else if (r.pt && rlMap[r.pt] !== undefined) o.rl = rlMap[r.pt];
+    if (o.rl !== null && r.pt) rlMap[r.pt] = o.rl;
+    if (r.bs != null && o.rl !== null) HI = o.rl + r.bs;
+    o.hi = HI;
+    if (known !== null) o.err = o.miscl; else if (o.rl !== null && o.tru !== null && o.calc !== null) o.err = (o.rl - o.tru) * 1000;
+    out.push(o);
+  });
+  return out;
+}
+
+function fbSummary(comp) {
+  let F = -1, L = -1;
+  rows.forEach((r, i) => {
+    const p = ptById(r.pt);
+    if (F < 0 && r.bs != null && comp[i].rl !== null && p && p.bm) F = i;
+    if (r.fs != null && comp[i].calc !== null) L = i;
+  });
+  const lines = [];
+  if (F < 0 || L < F) { lines.push('أضف BS على نقطة BM ثم FS على نقطة لاحقة لتظهر فحوص الحساب والإغلاق.'); return lines; }
+  let sb = 0, sf = 0, dist = 0;
+  for (let i = 0; i <= L; i++) {
+    const r = rows[i];
+    if (r.bs != null && i !== L) sb += r.bs;
+    if (r.fs != null) sf += r.fs;
+    if (r.d) { if (i !== L && r.d.bs) dist += r.d.bs; if (r.d.fs) dist += r.d.fs; }
+  }
+  const dr = comp[L].calc - comp[F].rl, chk = (sb - sf) - dr;
+  lines.push(`ΣBS = ${sb.toFixed(3)} | ΣFS = ${sf.toFixed(3)} | ΣBS−ΣFS = ${(sb - sf).toFixed(3)} | ΔRL = ${dr.toFixed(3)}`);
+  lines.push(Math.abs(chk) < 0.0006 ? '✓ فحص الحساب سليم' : `✗ فحص الحساب غير مطابق (فرق ${(chk * 1000).toFixed(1)} مم) — راجع الجمع والطرح`);
+  if (comp[L].miscl !== null) {
+    const allow = dist > 0 ? 12 * Math.sqrt(dist / 1000) : null, m = comp[L].miscl;
+    lines.push(`خطأ الإغلاق = ${m >= 0 ? '+' : ''}${m.toFixed(1)} مم` + (allow !== null ? ` | المسموح 12√K = ${allow.toFixed(1)} مم (K = ${(dist / 1000).toFixed(3)} كم) → ${Math.abs(m) <= allow ? '✓ مقبول' : '✗ مرفوض'}` : ''));
+  }
+  return lines;
+}
+
+function fbRender() {
+  const comp = fbCompute(), showErr_ = !CFG.exam;
+  const opts = pt => ['<option value=""></option>'].concat(job.points.map(p => `<option value="${p.id}"${p.id === pt ? ' selected' : ''}>${p.id}</option>`)).concat(pt && !ptById(pt) ? [`<option value="${pt}" selected>${pt}</option>`] : []).join('');
+  let h = `<thead><tr><th>#</th><th>النقطة</th><th>BS</th><th>IS</th><th>FS</th><th>HI</th><th>RL</th><th>ملاحظات</th>${showErr_ ? '<th>±مم</th>' : ''}</tr></thead><tbody>`;
+  rows.forEach((r, i) => {
+    const num = f => `<input class="fn" type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="${f}" value="${r[f] ?? ''}">`;
+    const hiCell = CFG.manual ? `<td><input type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="uhi" value="${r.uhi ?? ''}"></td>` : `<td class="calc" data-c="hi${i}"></td>`;
+    const rlCell = CFG.manual ? `<td><input type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="url" value="${r.url ?? ''}"></td>` : `<td class="calc" data-c="rl${i}"></td>`;
+    h += `<tr><td>${i + 1}</td><td><select data-r="${i}" data-f="pt">${opts(r.pt)}</select></td><td>${num('bs')}</td><td>${num('is')}</td><td>${num('fs')}</td>${hiCell}${rlCell}<td><input type="text" data-r="${i}" data-f="rem" value="${(r.rem || '').replace(/"/g, '&quot;')}"></td>${showErr_ ? `<td class="calc" data-c="er${i}"></td>` : ''}</tr>`;
+  });
+  fbRoot.innerHTML = h + '</tbody>';
+  fbRefresh();
+}
+
+function fbRefresh() {
+  const comp = fbCompute();
+  rows.forEach((r, i) => {
+    const o = comp[i];
+    ['bs', 'is', 'fs'].forEach(f => {
+      const el = fbRoot.querySelector(`[data-r="${i}"][data-f="${f}"]`); if (!el) return;
+      let cls = 'fn';
+      const tr = r.tr && r.tr[f];
+      if (!CFG.exam && tr != null && r[f] != null) { const d = Math.abs(r[f] - tr) * 1000; cls += d <= 3 ? ' ok' : d <= 10 ? ' warn' : ' bad'; }
+      el.className = cls;
+    });
+    if (CFG.manual) {
+      [['uhi', o.hi], ['url', o.rl]].forEach(([f, ref]) => {
+        const el = fbRoot.querySelector(`[data-r="${i}"][data-f="${f}"]`); if (!el) return;
+        el.className = r[f] == null ? '' : ref !== null && Math.abs(r[f] - ref) <= 0.0015 ? 'ok' : 'bad';
+      });
+    } else {
+      const a = fbRoot.querySelector(`[data-c="hi${i}"]`), b = fbRoot.querySelector(`[data-c="rl${i}"]`);
+      if (a) a.textContent = f3(o.hi); if (b) b.textContent = f3(o.rl);
+    }
+    const er = fbRoot.querySelector(`[data-c="er${i}"]`);
+    if (er) { er.textContent = o.err === null ? '' : (o.err >= 0 ? '+' : '') + o.err.toFixed(0); er.style.color = o.err === null ? '' : Math.abs(o.err) <= 10 ? '#7ee787' : '#ff7b72'; }
+  });
+  $('#fbSum').textContent = rows.length ? fbSummary(comp).join('\n') : 'الدفتر فارغ. أضف قراءة من تبويب المسح (➕ للدفتر) أو أضف صفاً يدوياً.';
+}
+
+['input', 'change'].forEach(ev => fbRoot.addEventListener(ev, e => {
+  const t = e.target, i = +t.dataset.r, f = t.dataset.f;
+  if (isNaN(i) || !f || !rows[i]) return;
+  const r = rows[i];
+  if (f === 'pt') r.pt = t.value; else if (f === 'rem') r.rem = t.value; else r[f] = numOrNull(t.value);
+  fbRefresh(); saveState();
+}));
+$('#btnAddRow').onclick = () => { rows.push(newRow(holder.station ? holder.station.id : '')); fbRender(); saveState(); };
+$('#btnDelRow').onclick = () => { rows.pop(); fbRender(); saveState(); };
+$('#btnClearFb').onclick = () => { if (!rows.length || confirm('مسح كل صفوف الدفتر؟')) { rows = []; fbRender(); saveState(); $('#evalBox').textContent = ''; } };
+
+$('#btnEval').onclick = () => {
+  const comp = fbCompute(), finals = {}, lines = [];
+  rows.forEach((r, i) => { const p = ptById(r.pt), o = comp[i]; if (p && !p.bm && o.rl !== null && o.calc !== null && o.err !== null) finals[p.id] = { rl: o.rl, err: o.err }; });
+  job.points.filter(p => !p.bm).forEach(p => {
+    const f = finals[p.id];
+    lines.push(f ? `${p.id}: RL = ${f.rl.toFixed(3)} م | الخطأ ${f.err >= 0 ? '+' : ''}${f.err.toFixed(0)} مم ${Math.abs(f.err) <= 10 ? '✓' : '✗'}` : `${p.id}: لم تُقَس بعد`);
+  });
+  lines.push(''); fbSummary(comp).forEach(l => lines.push(l));
+  const errs = Object.values(finals).map(f => f.err);
+  if (errs.length) lines.push(`عدد النقاط المقاسة ${errs.length}/${job.points.filter(p => !p.bm).length} | أكبر خطأ ${Math.max(...errs.map(Math.abs)).toFixed(0)} مم`);
+  $('#evalBox').textContent = lines.join('\n');
+};
+
+$('#btnCsv').onclick = async () => {
+  const comp = fbCompute(), lines = ['Point,BS,IS,FS,HI,RL,Remarks'];
+  rows.forEach((r, i) => lines.push([r.pt, f3(r.bs), f3(r.is), f3(r.fs), f3(comp[i].hi), f3(comp[i].rl), '"' + (r.rem || '').replace(/"/g, '""') + '"'].join(',')));
+  const t = lines.join('\n');
+  try { await navigator.clipboard.writeText(t); toast('نُسخ الجدول (CSV)'); }
+  catch (e) { const b = $('#csvBox'); b.style.display = 'block'; b.value = t; b.select(); toast('انسخ النص من الخانة'); }
+};
+
+const KN_NAME = { bs: 'BS (خلفية)', is: 'IS (متوسطة)', fs: 'FS (أمامية)' };
+function say(t, c) { const m = $('#readMsg'); m.textContent = t; m.className = 'stat ' + (c || ''); }
+$('#btnRead').onclick = () => {
+  const kind = $('#rdType').value, v = parseFloat($('#inRead').value);
+  if (isNaN(v)) return say('اكتب القراءة بالمتر، مثل 1.423', 'warn');
+  if (!I.st.mounted || holder.walking || !S.hit || !holder.station) return say('الشعيرة الأفقية ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (I.getTilt().arc > I.TY().comp) return say('الجهاز غير مسوّى (خارج مدى المعوّض) — القراءة غير معتمدة. سوِّه أولاً.', 'bad');
+  const p = holder.station;
+  let r = rows[rows.length - 1];
+  const reuse = r && r.pt === p.id && (kind === 'bs' || (kind === 'fs' ? r.is == null : r.fs == null));
+  if (!reuse) { r = newRow(p.id); rows.push(r); }
+  r[kind] = v; r.tr[kind] = S.reading; r.d[kind] = S.dist;
+  const ad = Math.abs(v - S.reading) * 1000;
+  let msg = `✓ أُضيفت ${KN_NAME[kind]} عند ${p.id}`, cls = 'ok';
+  if (!CFG.exam) { msg += ad <= 3 ? ` — دقيقة (فارق ${ad.toFixed(1)} مم)` : ad <= 10 ? ` — قريبة (فارق ${ad.toFixed(0)} مم)` : ` — بعيدة! فارق ${ad.toFixed(0)} مم`; cls = ad <= 3 ? 'ok' : ad <= 10 ? 'warn' : 'bad'; }
+  const dv = parseFloat($('#inDist').value);
+  if (!isNaN(dv) && S.D) { if (Math.abs(dv - S.D) <= 0.8) { flags.dist = true; msg += ` | المسافة صحيحة (${S.D.toFixed(1)} م)`; } else msg += ` | المسافة الصحيحة ≈ ${S.D.toFixed(1)} م`; }
+  flags.read = true;
+  flags.two = new Set(rows.filter(q => q.bs != null || q.is != null || q.fs != null).map(q => q.pt)).size >= 2;
+  stepKey = ''; $('#inRead').value = '';
+  say(msg, cls); fbRender(); saveState();
+};
+
+// ================= دفتر التيودوليت والتاكيومتر =================
+// NIVO-V5 — تيودوليت رقمي + تاكيومتر يدوي ذاتي الاختزال (قوانين المقرر) + تاكيومتر آلي
+const SEC = DEG / 3600;
+const ttRoot = $('#tt');
+const isStad = () => I.type === 'theo' || I.type === 'tach';
+const kindRows = () => rowsT.map((r, i) => [r, i]).filter(([r]) => r.k === I.type);
+
+function ttCalc(r) {
+  const su = setupById(r.su), p = ptById(r.pt), o = {};
+  if (!su || !p) return o;
+  const zen = SM.zenith(r.v, r.face), Zs = zOf(su);
+  o.Dt = Math.hypot(p.x - su.x, p.z - su.z); o.Zt = zOf(p);
+  if (r.k === 'tach' || r.k === 'theo') {
+    if (r.u != null && r.l != null) {
+      Object.assign(o, r.k === 'tach' ? SM.stadiaReduced(r, Zs) : SM.stadiaClassic(r, zen, Zs));
+      o.eD = (o.D - o.Dt) * 100; if (o.Z != null) o.eZ = (o.Z - o.Zt) * 1000;
+    }
+  } else if (r.sd != null) {
+    const c0 = crd(su.x, su.z), ct = crd(p.x, p.z);
+    Object.assign(o, SM.totalStation(r, c0, Zs));
+    o.eN = (o.N - ct.N) * 1000; o.eE = (o.E - ct.E) * 1000; o.eZ = (o.Z - o.Zt) * 1000;
+  }
+  return o;
+}
+
+function ttRender() {
+  const kind = I.type, exam = CFG.exam;
+  const opts = pt => ['<option value=""></option>'].concat(job.points.map(p => `<option value="${p.id}"${p.id === pt ? ' selected' : ''}>${p.id}</option>`)).concat(pt && !ptById(pt) ? [`<option value="${pt}" selected>${pt}</option>`] : []).join('');
+  const cols = kind === 'tach' ? ['#', 'النقطة', 'Hz', 'V', 'وجه', 'ق ع', 'ق و', 'ق س', 'K', 'S', 'D م', 'ΔH م', 'Z م'].concat(exam ? [] : ['±D سم', '±Z مم'])
+    : kind === 'theo' ? ['#', 'النقطة', 'Hz', 'V', 'وجه', 'U', 'M', 'L', 'D م', 'Z م'].concat(exam ? [] : ['±D سم', '±Z مم'])
+    : ['#', 'النقطة', 'Hz', 'V', 'وجه', 'SD', 'hr', 'HD', 'VD', 'N', 'E', 'Z'].concat(exam ? [] : ['±N مم', '±E مم', '±Z مم']);
+  let h = '<thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+  kindRows().forEach(([r, i]) => {
+    const inp = (f, v) => `<input type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="${f}" value="${v ?? ''}">`;
+    const c = k => `<td class="calc" data-c="${k}${i}"></td>`;
+    h += `<tr><td>${i + 1}</td><td><select data-r="${i}" data-f="pt">${opts(r.pt)}</select></td><td class="calc">${dms(r.hz)}</td><td class="calc">${dms(r.v)}</td><td>${r.face === 1 ? 'I' : 'II'}</td>`;
+    if (kind === 'tach') h += `<td>${inp('u', r.u)}</td><td>${inp('m', r.m)}</td><td>${inp('l', r.l)}</td><td>${inp('kc', r.kc)}</td><td>${inp('s', r.s)}</td>${c('D')}${c('dH')}${c('Z')}` + (exam ? '' : c('eD') + c('eZ'));
+    else if (kind === 'theo') h += `<td>${inp('u', r.u)}</td><td>${inp('m', r.m)}</td><td>${inp('l', r.l)}</td>${c('D')}${c('Z')}` + (exam ? '' : c('eD') + c('eZ'));
+    else h += `<td class="calc">${(r.sd ?? 0).toFixed(3)}</td><td>${inp('hr', r.hr)}</td>${c('HD')}${c('VD')}${c('N')}${c('E')}${c('Z')}` + (exam ? '' : c('eN') + c('eE') + c('eZ'));
+    h += '</tr>';
+  });
+  ttRoot.innerHTML = h + '</tbody>';
+  ttRefresh();
+}
+
+function ttRefresh() {
+  const set = (k, i, v, d, color) => {
+    const el = ttRoot.querySelector(`[data-c="${k}${i}"]`); if (!el) return;
+    el.textContent = v == null || Number.isNaN(v) ? '' : v.toFixed(d); if (color !== undefined) el.style.color = color;
+  };
+  const col = (e, lim) => (e == null ? '' : Math.abs(e) <= lim ? '#7ee787' : '#ff7b72');
+  kindRows().forEach(([r, i]) => {
+    const o = ttCalc(r);
+    if (isStad()) {
+      set('D', i, o.D, 2); set('Z', i, o.Z, 3); set('eD', i, o.eD, 1, col(o.eD, 10)); set('eZ', i, o.eZ, 0, col(o.eZ, 15));
+      if (r.k === 'tach') set('dH', i, o.dH, 3);
+    } else { set('HD', i, o.HD, 3); set('VD', i, o.VD, 3); set('N', i, o.N, 3); set('E', i, o.E, 3); set('Z', i, o.Z, 3); set('eN', i, o.eN, 0, col(o.eN, 15)); set('eE', i, o.eE, 0, col(o.eE, 15)); set('eZ', i, o.eZ, 0, col(o.eZ, 15)); }
+  });
+  $('#ttSum').textContent = ttSummary(false).join('\n');
+}
+
+function ttSummary(reveal) {
+  const rr = rowsT.filter(r => r.k === I.type), lines = [], show = reveal || !CFG.exam;
+  if (!rr.length) return ['لا توجد قياسات بعد. ' + (I.type === 'ts' ? 'وجّه الشعيرة إلى المنشور واضغط 📏 قياس وحفظ.' : 'اقرأ ق ع/ق و/ق س (U/M/L) واضغط ➕ تسجيل.')];
+  lines.push('عدد القياسات: ' + rr.length);
+  if (isStad() && rr.length >= 2) {
+    const a = rr[rr.length - 2], b = rr[rr.length - 1], su = setupById(a.su), pa = ptById(a.pt), pb = ptById(b.pt);
+    if (a.su === b.su && su && pa && pb && a.pt !== b.pt && a.face === b.face) {
+      const ang = (((b.hz - a.hz) % TAU) + TAU) % TAU, bt = p => Math.atan2(p.x - su.x, -(p.z - su.z)), trAng = (((bt(pb) - bt(pa)) % TAU) + TAU) % TAU;
+      lines.push(`الزاوية الأفقية ${a.pt}→${b.pt} = ${dms(ang, 1)}` + (show ? ` | الحقيقية ${dms(trAng, 1)} | الخطأ ${(wrapPi(ang - trAng) / SEC).toFixed(0)}″` : ''));
+    }
+  }
+  const by = {};
+  rr.forEach(r => { const k = r.su + '|' + r.pt; (by[k] = by[k] || {})[r.face] = r; });
+  Object.values(by).forEach(g => {
+    if (!g[1] || !g[2]) return;
+    const a = g[1], b = g[2], ie = (a.v + b.v - TAU) / 2, hzd = wrapPi(b.hz - a.hz - Math.PI);
+    const zz = Math.min(Math.max(a.v, 0.2), Math.PI - 0.2), c2 = hzd * Math.sin(zz) / 2, mh = a.hz + wrapPi(b.hz - Math.PI - a.hz) / 2;
+    let s = `${a.pt} (الوجهان): Hz متوسط = ${dms(mh, 1)} | i المقدّر = ${(wrapPi(ie) / SEC).toFixed(0)}″ | |c| المقدّر = ${(Math.abs(c2) / SEC).toFixed(0)}″`;
+    if (show && I.ERR.on) s += ` | الحقيقي: i = ${I.errArc('i').toFixed(0)}″، |c| = ${Math.abs(I.errArc('c')).toFixed(0)}″` + (I.type === 'tach' ? ' (i يشمل برغي الفهرس)' : '');
+    lines.push(s);
+  });
+  if (show) {
+    const es = [];
+    rr.forEach(r => { const o = ttCalc(r); if (isStad()) { if (o.eZ != null) es.push(Math.abs(o.eZ)); } else if (o.eN != null) es.push(Math.max(Math.abs(o.eN), Math.abs(o.eE), Math.abs(o.eZ))); });
+    if (es.length) lines.push(`أكبر خطأ في المنسوب/الإحداثيات = ${Math.max(...es).toFixed(0)} مم`);
+  }
+  return lines;
+}
+
+['input', 'change'].forEach(ev => ttRoot.addEventListener(ev, e => {
+  const t = e.target, i = +t.dataset.r, f = t.dataset.f;
+  if (isNaN(i) || !f || !rowsT[i]) return;
+  if (f === 'pt') rowsT[i].pt = t.value; else rowsT[i][f] = numOrNull(t.value);
+  ttRefresh(); saveState();
+}));
+$('#btnTtDel').onclick = () => { const idx = rowsT.map(r => r.k).lastIndexOf(I.type); if (idx >= 0) rowsT.splice(idx, 1); ttRender(); saveState(); };
+$('#btnTtClear').onclick = () => { if (confirm('مسح كل قياسات هذا الجهاز؟')) { rowsT = rowsT.filter(r => r.k !== I.type); ttRender(); saveState(); } };
+$('#btnTtEval').onclick = () => { $('#ttSum').textContent = ttSummary(true).join('\n'); };
+$('#btnTtCsv').onclick = async () => {
+  const kind = I.type, lines = [kind === 'tach' ? 'Point,Hz,V,Face,U,M,L,K,S,D,dH,Z' : kind === 'theo' ? 'Point,Hz,V,Face,U,M,L,D,Z' : 'Point,Hz,V,Face,SD,hr,HD,VD,N,E,Z'];
+  kindRows().forEach(([r]) => {
+    const o = ttCalc(r), base = [r.pt, dms(r.hz, 1), dms(r.v, 1), r.face === 1 ? 'I' : 'II'];
+    const rest = kind === 'tach' ? [f3(r.u), f3(r.m), f3(r.l), f3(r.kc), f3(r.s), f3(o.D), f3(o.dH), f3(o.Z)] : kind === 'theo' ? [f3(r.u), f3(r.m), f3(r.l), f3(o.D), f3(o.Z)] : [f3(r.sd), f3(r.hr), f3(o.HD), f3(o.VD), f3(o.N), f3(o.E), f3(o.Z)];
+    lines.push(base.concat(rest).join(','));
+  });
+  const t = lines.join('\n');
+  try { await navigator.clipboard.writeText(t); toast('نُسخ الجدول (CSV)'); }
+  catch (e) { const b = $('#ttCsvBox'); b.style.display = 'block'; b.value = t; b.select(); toast('انسخ النص من الخانة'); }
+};
+
+function afterTTRecord(r, msg, cls) {
+  flags.read = true;
+  if (r.face === 2) flags.face2 = true;
+  flags.two = new Set(rowsT.filter(q => q.k === I.type).map(q => q.pt)).size >= 2;
+  stepKey = ''; say(msg, cls); ttRender(); saveState();
+}
+const curSetupId = () => (job.setups[job.cur] || {}).id;
+
+// ---- تيودوليت رقمي: Hz وV تُسجَّل تلقائياً ----
+$('#btnThRec').onclick = () => {
+  const u = numOrNull($('#inU').value), m = numOrNull($('#inM').value), l = numOrNull($('#inL').value), i = numOrNull($('#inHI').value);
+  if (!I.st.mounted || !holder.station || holder.walking || !S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (u === null || l === null || u <= l) return say('اكتب قراءة الشعيرة العليا U (الأكبر) والسفلى L', 'warn');
+  if (i === null) return say('قِس ارتفاع الجهاز i أولاً (📏)', 'warn');
+  const rd = I.readings();
+  const r = { k: 'theo', pt: holder.station.id, su: curSetupId(), hz: rd.hz, v: rd.v, face: rd.face, u, m, l, i, tr: { u: S.U, m: S.reading, l: S.L } };
+  rowsT.push(r);
+  let msg = `✓ سُجّل: Hz ${dms(rd.hz)} V ${dms(rd.v)} (وجه ${rd.face === 1 ? 'I' : 'II'})`, cls = 'ok';
+  if (!CFG.exam && S.U != null) { const e = Math.max(Math.abs(u - S.U), Math.abs(l - S.L)) * 1000; msg += ` | فارق قراءة الشعيرات ${e.toFixed(0)} مم`; cls = e <= 5 ? 'ok' : e <= 15 ? 'warn' : 'bad'; }
+  if (I.getTilt().arc > 3) { msg += ' | ⚠ الجهاز غير مسوّى جيداً'; if (cls === 'ok') cls = 'warn'; }
+  $('#inU').value = $('#inM').value = $('#inL').value = '';
+  afterTTRecord(r, msg, cls);
+};
+
+// ---- تاكيومتر يدوي ذاتي الاختزال: تقرأ أنت Hz وV وق ع وق و وق س وتحسب K ----
+function updK() {
+  const rd = I.readings(), zen = SM.zenith(rd.v, rd.face);
+  setTxt('#kHint', `K النظري = 200·tanα = ${SM.kTheory(zen).toFixed(3)}  (α = ${(SM.elev(zen) / DEG).toFixed(3)}°).  ΔH = (ق ع − ق و)·K + J − S`);
+}
+$('#btnTcRec').onclick = () => {
+  const u = numOrNull($('#inU').value), m = numOrNull($('#inM').value), l = numOrNull($('#inL').value), i = numOrNull($('#inHI').value);
+  const kc = numOrNull($('#inK').value), s = numOrNull($('#inS').value);
+  const hD = numOrNull($('#inHzD').value), hM = numOrNull($('#inHzM').value), vD = numOrNull($('#inVD').value), vM = numOrNull($('#inVM').value);
+  if (!I.st.mounted || !holder.station || holder.walking || !S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (hD === null || vD === null) return say('اكتب قراءتي Hz وV (درجات ودقائق) من نافذة القراءة', 'warn');
+  if (u === null || l === null || u <= l) return say('اكتب ق ع (الأكبر) وق س (الأصغر)', 'warn');
+  if (kc === null) return say('اكتب قيمة K (انظر K النظري تحت الخانات)', 'warn');
+  if (s === null) return say('اكتب S: قراءة شعيرة التصويب (القصيرة تحت المنتصف)', 'warn');
+  if (i === null) return say('قِس ارتفاع الجهاز J أولاً (📏)', 'warn');
+  const hz = (((hD + (hM || 0) / 60) % 360 + 360) % 360) * DEG, v = (((vD + (vM || 0) / 60) % 360 + 360) % 360) * DEG, rd = I.readings();
+  const r = { k: 'tach', pt: holder.station.id, su: curSetupId(), hz, v, face: rd.face, u, m, l, s, kc, i, tr: { u: S.U, m: S.reading, l: S.L, s: S.sr, hz: rd.hz, v: rd.v } };
+  rowsT.push(r);
+  const o = ttCalc(r);
+  let msg = `✓ سُجّل: D = ${o.D.toFixed(2)} م` + (o.dH != null ? ` | ΔH = ${o.dH >= 0 ? '+' : ''}${o.dH.toFixed(3)} م` : ''), cls = 'ok';
+  const mm = m != null ? m : (u + l) / 2;
+  if (Math.abs(o.D - (u - mm) * 200) > 0.15) { msg += ' | ⚠ ق و ليست منتصف ق ع وق س (D من المعادلتين تختلف)'; cls = 'warn'; }
+  if (!CFG.exam) {
+    const eh = Math.abs(wrapPi(hz - rd.hz)) / SEC, ev2 = Math.abs(wrapPi(v - rd.v)) / SEC, es = S.U != null ? Math.max(Math.abs(u - S.U), Math.abs(l - S.L), m != null ? Math.abs(m - S.reading) : 0, S.sr != null ? Math.abs(s - S.sr) : 0) * 1000 : 0;
+    msg += ` | فارق قراءتك: Hz ${eh.toFixed(0)}″ و V ${ev2.toFixed(0)}″ والشعيرات ${es.toFixed(0)} مم`;
+    if (cls === 'ok') cls = Math.max(eh, ev2) <= 90 && es <= 5 ? 'ok' : Math.max(eh, ev2) <= 240 && es <= 15 ? 'warn' : 'bad';
+  }
+  if (Math.abs(I.indexBubble()) > 0.5) { msg += ' | ⚠ كمانة الدائرة الرأسية غير مركزية'; if (cls === 'ok') cls = 'warn'; }
+  if (I.getTilt().arc > 3) { msg += ' | ⚠ الجهاز غير مسوّى جيداً'; if (cls === 'ok') cls = 'warn'; }
+  $('#inU').value = $('#inM').value = $('#inL').value = $('#inK').value = $('#inS').value = '';
+  afterTTRecord(r, msg, cls);
+};
+
+// ---- تاكيومتر آلي: EDM ----
+$('#btnMeasTS').onclick = () => {
+  if (!I.st.mounted || holder.walking || !holder.station) return say('أرسل المنشور وانتظر وصوله', 'warn');
+  if (!S.hit || !S.edm) return say('الشعيرة ليست على منتصف المنشور — وجّه بدقة (EDM لا يعيد إشارة).', 'warn');
+  const i = numOrNull($('#inHI').value), hr = numOrNull($('#inHr').value);
+  if (i === null) return say('قِس ارتفاع الجهاز i أولاً (📏)', 'warn');
+  if (hr === null) return say('اكتب ارتفاع العاكس hr', 'warn');
+  const rd = I.readings(), ee = I.edmErr();
+  const sdv = Math.round((S.sd * (1 + ee.ppm * 1e-6) + ee.zero + (Math.random() - 0.5) * 2 * (0.002 + 2e-6 * S.sd)) * 1000) / 1000;
+  const r = { k: 'ts', pt: holder.station.id, su: curSetupId(), hz: rd.hz, v: rd.v, face: rd.face, sd: sdv, hr, i, comp: rd.comp };
+  rowsT.push(r);
+  const o = ttCalc(r);
+  lastMeas = `SD ${sdv.toFixed(3)}  HD ${o.HD.toFixed(3)}  VD ${o.VD >= 0 ? '+' : ''}${o.VD.toFixed(3)}`;
+  let msg = `✓ ${r.pt}: ${lastMeas}`, cls = 'ok';
+  if (!flags.orient) { msg += ' | ⚠ الاتجاه غير مضبوط: الإحداثيات مدوّرة'; cls = 'warn'; }
+  if (!rd.comp) { msg += ' | ⚠ الميل خارج مدى المعوّض'; cls = 'bad'; }
+  afterTTRecord(r, msg, cls);
+};
+$('#btnOrient').onclick = () => {
+  if (!I.st.mounted) return say('ركّب الجهاز أولاً', 'warn');
+  const bs = ptById($('#bsSel').value), s0 = job.setups[job.cur];
+  if (!bs || !s0) return say('اختر نقطة BS معلومة (BM)', 'warn');
+  if (!holder.station || holder.station.id !== bs.id) return say('أرسل المنشور إلى ' + bs.id + ' أولاً', 'warn');
+  if (!S.hit || !S.edm) return say('وجّه الشعيرة إلى منتصف المنشور أولاً', 'warn');
+  const az = Math.atan2(bs.x - s0.x, -(bs.z - s0.z)), face2 = I.st.vz > Math.PI;
+  I.st.hz0 = I.st.heading - (az + (face2 ? Math.PI : 0)); flags.orient = true; stepKey = '';
+  say(`✓ ضُبط الاتجاه: Hz = ${dms(az, 1)} (سمت ${s0.id}→${bs.id})`, 'ok');
+};
+
+// ---- نافذة قراءة الدوائر (ميكروسكوب بمقياس دقائق) وكمانة الفهرس ----
+const rw = $('#rdwin'), rwc = rw.getContext('2d'), ix = $('#idxv'), ixc = ix.getContext('2d');
+(function () { const d = Math.min(devicePixelRatio || 1, 2); rw.width = 340 * d; rw.height = 124 * d; rwc.setTransform(d, 0, 0, d, 0, 0); ix.width = 340 * d; ix.height = 56 * d; ixc.setTransform(d, 0, 0, d, 0, 0); })();
+function drawStrip(c, y, label, ang) {
+  const x0 = 34, w = 296, deg = ang / DEG, d = Math.floor(deg), m = (deg - d) * 60;
+  c.fillStyle = '#e8e4cf'; c.fillRect(x0, y, w, 46);
+  c.strokeStyle = '#222'; c.lineWidth = 1; c.fillStyle = '#222'; c.font = '9px sans-serif'; c.textAlign = 'center';
+  for (let k = 0; k <= 60; k++) {
+    const x = x0 + k * w / 60, h = k % 10 === 0 ? 12 : k % 5 === 0 ? 9 : 6;
+    c.beginPath(); c.moveTo(x, y + 46); c.lineTo(x, y + 46 - h); c.stroke();
+    if (k % 10 === 0) c.fillText(String(k), x, y + 30);
+  }
+  const xl = x0 + m * w / 60;
+  c.strokeStyle = '#c1121f'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(xl, y + 2); c.lineTo(xl, y + 42); c.stroke();
+  c.fillStyle = '#c1121f'; c.font = 'bold 13px sans-serif'; c.textAlign = 'center'; c.fillText(d + '°', clamp(xl, x0 + 16, x0 + w - 16), y + 15);
+  c.fillStyle = '#fff'; c.font = '12px sans-serif'; c.textAlign = 'left'; c.fillText(label, 6, y + 28);
+}
+function drawReadWin() {
+  const rd = I.readings();
+  rwc.fillStyle = '#161616'; rwc.fillRect(0, 0, 340, 124);
+  drawStrip(rwc, 6, 'Hz', rd.hz); drawStrip(rwc, 68, 'V', rd.v);
+}
+function drawIdx() {
+  const c = ixc, b = I.indexBubble(), k = 23;
+  c.clearRect(0, 0, 340, 56); c.fillStyle = '#0d2a22'; c.fillRect(30, 12, 280, 32); c.strokeStyle = '#5fd6b0'; c.lineWidth = 2; c.strokeRect(30, 12, 280, 32);
+  for (let t = -6; t <= 6; t++) { c.strokeStyle = 'rgba(255,255,255,.25)'; c.lineWidth = 1; c.beginPath(); c.moveTo(170 + t * k, 12); c.lineTo(170 + t * k, 20); c.stroke(); }
+  c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.moveTo(170 - 0.5 * k, 12); c.lineTo(170 - 0.5 * k, 44); c.moveTo(170 + 0.5 * k, 12); c.lineTo(170 + 0.5 * k, 44); c.stroke();
+  c.fillStyle = 'rgba(190,255,225,.9)'; c.beginPath(); c.ellipse(clamp(170 + b * k, 56, 284), 28, 26, 12, 0, 0, 7); c.fill();
+}
+$$('[data-ix]').forEach(b => (b.onclick = () => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); I.nudgeIdx(+b.dataset.ix); }));
+addEventListener('nivo-custom', () => buildPartLabels());
+
+// ================= التسميات في العرض التفكيكي =================
+const _lv = new V3();
+function updLabels() {
+  const on = I.st.explode > 0.6 && I.st.mounted && !scopeFull;
+  lblBox.style.display = on ? 'block' : 'none'; if (!on) return;
+  const W = innerWidth, H = innerHeight;
+  curParts.forEach(p => {
+    if (!p.el) return;
+    p.anchor.getWorldPosition(_lv).project(cam);
+    p.el.style.display = _lv.z < 1 && _lv.z > -1 ? '' : 'none';
+    p.el.style.transform = `translate(${(_lv.x + 1) / 2 * W}px,${(1 - _lv.y) / 2 * H}px) translate(var(--sx),-50%)`;
+  });
+}
+
+// ================= الإطار =================
+const elT2 = $('#t2');
+let uiT = 0, lastHd = -1;
+function updUI() {
+  const T = I.getTilt(), m = I.st.mounted, ty = I.TY(), kind = I.type;
+  let t, c;
+  if (!m) { t = 'ركّب الجهاز أولاً'; c = 'warn'; }
+  else if (kind === 'level') {
+    if (T.arc <= ty.ring) { t = `✓ الفقاعة في المركز — ميلان ${T.arc.toFixed(1)}′`; c = 'ok'; }
+    else if (T.arc <= ty.comp) { t = `ضمن مدى المعوّض لكن غير متمركز — ${T.arc.toFixed(1)}′`; c = 'warn'; }
+    else { t = `⚠ ميلان ${T.arc.toFixed(0)}′ — خارج مدى المعوّض (±${ty.comp}′): قراءاتك ستكون خاطئة`; c = 'bad'; }
+  } else if (kind === 'theo' || kind === 'tach') {
+    const b = T.gx * Math.cos(I.st.heading) + T.gz * Math.sin(I.st.heading), bsec = b * 3437.75 * 60;
+    if (T.arc <= ty.ring) { t = `✓ مُسوّى — الفقاعة تقرأ ${bsec >= 0 ? '+' : ''}${bsec.toFixed(0)}″ (≤ 30″). دوّر 90° وتأكد`; c = 'ok'; }
+    else { t = `الفقاعة تقرأ ${b >= 0 ? '+' : ''}${(b * 3437.75).toFixed(1)}′ على محورها — دوّر الجهاز 90° وتحقق من الاتجاه الآخر`; c = 'warn'; }
+  } else {
+    const cr = (T.gx * Math.cos(I.st.heading) + T.gz * Math.sin(I.st.heading)) * 3437.75, al = (T.gx * Math.sin(I.st.heading) - T.gz * Math.cos(I.st.heading)) * 3437.75;
+    const tail = `X ${cr >= 0 ? '+' : ''}${cr.toFixed(1)}′  Y ${al >= 0 ? '+' : ''}${al.toFixed(1)}′`;
+    if (T.arc <= ty.ring) { t = `✓ مُسوّى — ${tail}`; c = 'ok'; }
+    else if (T.arc <= ty.comp) { t = `ضمن مدى المعوّض ±3′ لكن غير متمركز — ${tail}`; c = 'warn'; }
+    else { t = `⚠ الميل خارج ±3′: المعوّض معطّل — ${tail}`; c = 'bad'; }
+  }
+  setTxt('#lvStat', t); setCl('#lvStat', 'stat ' + c);
+  const ht = I.headTiltDeg();
+  setTxt('#headStat', `ميلان رأس الحامل: ${ht.toFixed(2)}°`); setCl('#headStat', 'stat ' + (ht <= 0.5 ? 'ok' : ht <= 2 ? 'warn' : 'bad'));
+  if (isTT()) {
+    const rd = I.readings();
+    if (kind === 'tach') {
+      const ib = I.indexBubble(), okb = Math.abs(ib) <= 0.5;
+      setTxt('#hud', m ? (okb ? 'كمانة V ✓' : '⚠ كمانة V') : ''); $('#hud').style.color = okb ? '#7ee787' : '#f2cc60';
+      setTxt('#idxStat', okb ? '✓ مركزية' : 'غير مركزية — حرّك برغي الفهرس');
+    } else {
+      let s = `Hz ${dms(rd.hz)}\nV  ${dms(rd.v)}   وجه ${rd.face === 1 ? 'I' : 'II'}`;
+      if (kind === 'ts') s += `\n${rd.comp ? 'معوّض ✓' : '⚠ الميل خارج ±3′ — المعوّض معطّل'}${flags.orient ? '' : '   |   الاتجاه غير مضبوط'}${lastMeas ? '\n' + lastMeas : ''}`;
+      setTxt('#lcd', s);
+      setTxt('#hud', m ? `Hz ${dms(rd.hz)}\nV ${dms(rd.v)}${kind === 'ts' ? (rd.comp ? ' ✓' : ' ⚠') : ''}` : '');
+      $('#hud').style.color = kind === 'ts' && !rd.comp ? '#ff7b72' : '#7ee787';
+    }
+  } else {
+    setTxt('#hud', !m ? '' : T.arc <= ty.comp ? 'المعوّض ✓' : '⚠ المعوّض خارج المدى');
+    $('#hud').style.color = T.arc <= ty.comp ? '#7ee787' : '#ff7b72';
+  }
+  $$('#ptBtns button').forEach(b => b.classList.toggle('on', !holder.walking && !!holder.station && holder.station.id === b.dataset.id));
+  updLegLabels();
+  if (mapOpen()) drawMap();
+  const F = flags, ts = kind === 'ts';
+  F.height = I.st.H >= 1.3 && I.st.H <= 1.6;
+  F.headLevel = ht <= 0.5;
+  F.legsLock = I.st.legLock.every(Boolean);
+  F.mounted = m;
+  F.level = m && T.arc <= ty.ring;
+  F.rough = m && !holder.walking && (isTT() ? S.ang < 0.6 * DEG : Math.abs(wrapPi(I.st.heading - bearingToStaff())) < 0.55 * DEG);
+  F.aim = m && !!S.hit && Math.abs(S.lat) < (ts ? 0.05 : 0.04) && I.st.clamp && (!isTT() || I.st.clampV) && (!ts || !!S.edm);
+  F.eye = Math.abs(eyeV - eyeIdeal) < 0.05;
+  F.focus = m && !!S.hit && Math.abs(Math.log(3 * Math.pow(200 / 3, focV) / S.dist)) <= 0.12;
+  renderSteps();
+}
+
+function step(dt) {
+  I.update(dt); updateHolder(dt);
+  if (slow) { slowT += dt; if (slowT > 0.25) setHeading(I.st.heading + slow * DEG * Math.min(0.7, 0.12 + (slowT - 0.25) * 0.4) * dt); }
+  if (slowV) { slowVT += dt; if (slowVT > 0.25) setVz(I.st.vz + slowV * DEG * Math.min(0.7, 0.12 + (slowVT - 0.25) * 0.4) * dt); }
+  updCam(dt);
+  I.scopePose(scopeCam);
+  scene.updateMatrixWorld();
+  S = sightInfo();
+  scopeCam.getWorldDirection(_t); fx.setSpread(I.type === 'tach' ? 1 - _t.y * _t.y : 1); if (I.type === 'tach') updK();
+  const d = S.hit ? S.dist : 70, fd = 3 * Math.pow(200 / 3, focV);
+  blurFrac = clamp(Math.max(0, Math.abs(Math.log(fd / d)) - 0.1) * 18, 0, 16) / 370;
+  softFrac = Math.max(0, Math.abs(eyeV - eyeIdeal) - 0.04) * 20 / 370 * 2;
+  const hd = I.st.heading / DEG;
+  if (hd !== lastHd) { lastHd = hd; setTxt('#hdgVal', hd.toFixed(1) + '°'); jogT.style.backgroundPositionX = (-hd * 2) + 'px'; }
+  uiT += dt; if (uiT > 0.1) { uiT = 0; updUI(); }
+  const sheetMin = !sideLayout() && elSheet.classList.contains('min');
+  if (elT1.classList.contains('on') && !sheetMin) { drawLevel(); if (elLegs.open) drawHead(); }
+  if (I.type === 'tach' && elT2.classList.contains('on') && !sheetMin) { drawReadWin(); drawIdx(); }
+}
+
+function render() {
+  if (window.NIVO && window.NIVO.droneActive && window.NIVO.droneActive()) { window.NIVO.droneRender(); return; }
+  const W = innerWidth, H = innerHeight;
+  renderer.setScissorTest(false);
+  renderer.setRenderTarget(null);
+  renderer.setViewport(0, 0, W, H);
+  if (scopeFull) { renderer.setClearColor(0x000000, 1); renderer.clear(); }
+  else {
+    const r = elSheet.getBoundingClientRect();
+    let ox = 0, oy = -22;
+    if (sideLayout()) ox = Math.max(0, W - r.left) / 2;
+    else oy = (Math.max(0, H - r.top) - 44) / 2;
+    cam.aspect = W / H; cam.setViewOffset(W, H, ox, oy, W, H);
+    renderer.render(scene, cam);
+  }
+  if (I.st.mounted) {
+    const r = scopeEl.getBoundingClientRect();
+    if (r.width > 4) {
+      scopeCam.aspect = 1; scopeCam.updateProjectionMatrix();
+      fx.draw(scene, scopeCam, { x: r.left, y: H - r.bottom, w: r.width, h: r.height }, blurFrac, softFrac);
+    }
+  }
+  updLabels();
+}
+
+function resize() { renderer.setSize(innerWidth, innerHeight, false); if (mapOpen()) { sizeMap(); drawMap(); } }
+addEventListener('resize', resize); resize();
+
+// ---------- بدء ----------
+setQuality(+CFG.q); resize();
+setStaffStyle(CFG.pat, CFG.lab);
+lanRefresh();
+setVegDensity(+CFG.veg);
+doNewWorld(CFG.fix && +CFG.seed > 0 ? +CFG.seed : randSeed());
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  try { step(dt); } catch (e) { showErr('step: ' + e.message); }
+  if (!mapOpen()) { try { render(); } catch (e) { showErr('render: ' + e.message); } }
+  requestAnimationFrame(loop);
+})(last);
+
+// جسر للوحدات الإضافية (مساعدة قراءة الميرا)
+window.NIVO = { sight: () => S, cfg: () => CFG, type: () => I.type, say: (t, c) => say(t, c) };
+Object.assign(window.NIVO || (window.NIVO = {}), { toast, onJobChanged, placeInstrument });
+Object.assign(window.NIVO, { job: () => job, half: () => HALF });
+// NIVO-V9
+import * as THREE from 'three';
+
+const VERT = `
+varying vec2 vUv;
+void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+const FRAG = `
+uniform sampler2D tMap; uniform float uBlur; uniform float uSoft; uniform float uMode; uniform float uSpread; varying vec2 vUv;
+float ln(float d, float w, float s){ return 1.0 - smoothstep(w, w + s, abs(d)); }
+float segd(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0); return length(pa - ba * h); }
+void main(){
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  vec3 col;
+  if (uBlur < 0.0015) { col = texture2D(tMap, vUv).rgb; }
+  else {
+    float bias = log2(1.0 + uBlur * 700.0);
+    float o = uBlur * 0.4;
+    col = vec3(0.0);
+    for (int i = -1; i <= 1; i++) { for (int j = -1; j <= 1; j++) { col += texture2D(tMap, vUv + vec2(float(i), float(j)) * o, bias).rgb; } }
+    col /= 9.0;
+  }
+  float s = uSoft, w = 0.0045, ws = 0.003 + s;
+  // uMode: 0 = تيودوليت ، 1 = تاكيومتر يدوي مختزل (4 شعيرات أفقية + قطعة مائلة) ، 2 = آلي
+  float m0 = step(uMode, 0.5), m1 = step(0.5, uMode) * step(uMode, 1.5), m2 = step(1.5, uMode);
+  float full = m0 + m2;
+  float hy = 0.4775 * uSpread;
+  float h1 = ln(p.y, w, ws) * full;
+  float v1 = ln(p.x, w, ws);
+  float sd = (ln(p.y - hy, w, ws) + ln(p.y + hy, w, ws)) * step(abs(p.x), 0.24) * m0;
+  float tU = ln(p.y - hy, w, ws) * step(abs(p.x), 0.32);      // ق ع
+  float tM = ln(p.y, w, ws) * step(abs(p.x), 0.3);            // ق و
+  float tS = ln(p.y + 0.167, w, ws) * step(abs(p.x), 0.3);    // S (شعيرة التصويب)
+  float tL = ln(p.y + hy, w, ws) * step(abs(p.x), 0.32);      // ق س
+  float tI = 1.0 - smoothstep(w, w + ws, segd(p, vec2(0.32, hy), vec2(-0.38, 0.17 * hy))); // قطعة مائلة تخرج من العليا
+  float line = clamp(h1 + v1 + sd + (tU + tM + tS + tL + tI) * m1, 0.0, 1.0);
+  float halo = clamp(ln(p.y, w * 2.6, 0.004 + s) * full + ln(p.x, w * 2.6, 0.004 + s), 0.0, 1.0) * 0.45;
+  col = mix(col, vec3(1.0), halo);
+  col = mix(col, vec3(0.02), line * (1.0 - clamp(s * 10.0, 0.0, 0.6)));
+  col = mix(vec3(0.02, 0.02, 0.03), col, 1.0 - smoothstep(0.985, 1.0, r));
+  gl_FragColor = vec4(col, 1.0);
+  #include <colorspace_fragment>
+}`;
+
+export function createScopeFX(renderer) {
+  const rt = new THREE.WebGLRenderTarget(512, 512, { minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: true });
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { tMap: { value: rt.texture }, uBlur: { value: 0 }, uSoft: { value: 0 }, uMode: { value: 0 }, uSpread: { value: 1 } },
+    vertexShader: VERT, fragmentShader: FRAG, depthTest: false, depthWrite: false
+  });
+  const qs = new THREE.Scene(), quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  quad.frustumCulled = false; qs.add(quad);
+  const qc = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  let size = 512;
+  return {
+    setMode(m) { mat.uniforms.uMode.value = m; },
+    setStadia(on) { mat.uniforms.uMode.value = on ? 0 : 2; },
+    setSpread(v) { mat.uniforms.uSpread.value = v; },
+    draw(scene, cam, vp, blur, soft) {
+      const px = Math.max(160, Math.min(768, Math.round(vp.w * renderer.getPixelRatio())));
+      if (px !== size) { size = px; rt.setSize(px, px); }
+      renderer.setScissorTest(false);
+      renderer.setRenderTarget(rt); renderer.render(scene, cam); renderer.setRenderTarget(null);
+      mat.uniforms.uBlur.value = blur; mat.uniforms.uSoft.value = soft;
+      renderer.setScissorTest(true);
+      renderer.setViewport(vp.x, vp.y, vp.w, vp.h); renderer.setScissor(vp.x, vp.y, vp.w, vp.h);
+      renderer.render(qs, qc);
+      renderer.setScissorTest(false);
+    }
+  };
+}
+// معادلات المسح المشتركة (دوال نقية بلا اعتماد على الواجهة)
+export const DEG = Math.PI / 180, SEC = DEG / 3600, TAU = Math.PI * 2;
+export const wrapPi = a => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };
+export const dms = (rad, res = 5) => {
+  let s = Math.round(rad / DEG * 3600 / res) * res; s = ((s % 1296000) + 1296000) % 1296000;
+  return `${Math.floor(s / 3600)}°${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}′${String(s % 60).padStart(2, '0')}″`;
+};
+export const zenith = (v, face) => (face === 2 ? TAU - v : v);        // زاوية الزنت الحقيقية من قراءة الوجه
+export const elev = zen => Math.PI / 2 - zen;                          // الزاوية الرأسية α
+export const azimuth = (x1, z1, x2, z2) => Math.atan2(x2 - x1, -(z2 - z1));
+export const coords = (E0, N0, x, z) => ({ E: E0 + x, N: N0 - z });
+export const kTheory = zen => 200 * Math.tan(elev(zen));               // K للتاكيومتر ذاتي الاختزال
+export const levelHI = (rl, bs) => rl + bs;
+export const levelRL = (hi, r) => hi - r;
+export const leanErr = (R, th) => R * (1 / Math.cos(th) - 1);          // خطأ ميلان الميرا
+export const curvRef = D => 0.0675 * (D / 1000) ** 2;                  // الانحناء والانكسار (م)
+
+// تاكيومتري كلاسيكي (تيودوليت): D = 100·s·cos²α ، ΔZ = i + 50·s·sin2α − M
+export function stadiaClassic(r, zen, Zs) {
+  const s = r.u - r.l, a = elev(zen), m = r.m != null ? r.m : (r.u + r.l) / 2;
+  const D = 100 * s * Math.cos(a) ** 2, dz = (r.i ?? 0) + 50 * s * Math.sin(2 * a) - m;
+  return { s, D, dz, Z: Zs + dz };
+}
+// تاكيومتر ذاتي الاختزال (قوانين المقرر): D = (ق ع − ق س)×100 = (ق ع − ق و)×200 ، ΔH = (ق ع − ق و)·K + J − S
+export function stadiaReduced(r, Zs) {
+  const mm = r.m != null ? r.m : (r.u + r.l) / 2, ss = r.s != null ? r.s : mm, o = { D: (r.u - r.l) * 100, D2: (r.u - mm) * 200 };
+  if (r.kc != null) { o.dH = (r.u - mm) * r.kc + (r.i ?? 0) - ss; o.Z = Zs + o.dH; }
+  return o;
+}
+// محطة شاملة: HD = SD·sinZ ، VD = SD·cosZ ، إحداثيات الهدف
+export function totalStation(r, c0, Zs) {
+  const zen = zenith(r.v, r.face), az = r.face === 2 ? r.hz - Math.PI : r.hz;
+  const HD = r.sd * Math.sin(zen), VD = r.sd * Math.cos(zen);
+  return { HD, VD, N: c0.N + HD * Math.cos(az), E: c0.E + HD * Math.sin(az), Z: Zs + (r.i ?? 0) + VD - (r.hr ?? 0) };
+}
+// قياسان على نقطة واحدة بالوجهين (a وجه I و b وجه II): خطأ الفهرس وانحراف خط النظر والمتوسط
+export function twoFace(a, b) {
+  const ie = wrapPi((a.v + b.v - TAU) / 2), hzd = wrapPi(b.hz - a.hz - Math.PI), zz = Math.min(Math.max(a.v, 0.2), Math.PI - 0.2);
+  return { ie, c: hzd * Math.sin(zz) / 2, meanHz: a.hz + wrapPi(b.hz - Math.PI - a.hz) / 2 };
+}
+// تحميل نماذج glb مخصّصة من public/models: level.glb و theo.glb و tach.glb و ts.glb
+import * as THREE from 'three';
+import { GLTFLoader } from '/three/examples/jsm/loaders/GLTFLoader.js';
+import * as I from './instrument.js';
+
+const loader = new GLTFLoader();
+const find = (o, name) => { let r = null; o.traverse(x => { if (!r && x.name.toLowerCase() === name) r = x; }); return r; };
+
+function attach(kind, root) {
+  root.updateMatrixWorld(true);
+  const ali = root.children.find(o => o.name.toLowerCase() === 'alidade') || null;
+  const axis = find(root, 'axis') || find(root, 'telescope');
+  if (axis) I.TYPES[kind].trunH = new THREE.Vector3().setFromMatrixPosition(axis.matrixWorld).y; // ارتفاع محور النظر
+  const base = new THREE.Group();
+  root.children.slice().forEach(o => { if (o !== ali) base.add(o); });
+  I.instRoot.add(base);               // الأجزاء الثابتة: تميل مع الجهاز
+  if (ali) I.rotating.add(ali);       // الجزء الدوّار: يدور بالدوران الأفقي
+  const tel = ali && find(ali, 'telescope');
+  if (tel && kind !== 'level') I.ttTel[kind] = tel; // المنظار يدور رأسياً حول محور X
+  I.custom[kind] = { base, ali };
+  I.parts.forEach(p => { if (p.type === kind) p.obj.visible = false; });
+  I.setType(I.type);
+  dispatchEvent(new Event('nivo-custom'));
+  console.log('✓ نموذج مخصّص محمَّل:', kind);
+}
+
+['level', 'theo', 'tach', 'ts'].forEach(kind => {
+  loader.load('/models/' + kind + '.glb?v=' + Date.now(), g => attach(kind, g.scene), undefined, () => { /* لا يوجد ملف: يبقى النموذج المدمج */ });
+});
+
+(function tick() {
+  for (const k in I.custom) { const c = I.custom[k], v = I.type === k; c.base.visible = v; if (c.ali) c.ali.visible = v; }
+  requestAnimationFrame(tick);
+})();
+// مساعدة قراءة الميرا: تلميحات + أنيميشن خطوة بخطوة
+const $ = s => document.querySelector(s);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const ease = t => 1 - Math.pow(1 - t, 3);
+const N = () => window.NIVO;
+
+const style = document.createElement('style');
+style.textContent = `
+#hlp{position:fixed;inset:0;background:#0b0f16f2;z-index:15;overflow-y:auto;display:none;padding:8px;color:#fff;font-family:system-ui,Tahoma,sans-serif}
+#hlpHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+#hlpBody{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;align-items:flex-start}
+#hlpC{background:#fff;border-radius:8px;display:block}
+#hlpRight{flex:1;min-width:250px;max-width:420px}
+.hrow{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+#hlp button{background:#243044;color:#fff;border:1px solid #3a4a62;border-radius:10px;padding:7px 10px;font:inherit;font-size:13px}
+#hlp button.on{background:#2f6fed;border-color:#7aa5ff}
+#hlpDots{display:flex;gap:6px;margin:8px 0}
+#hlpDots i{width:22px;height:6px;border-radius:3px;background:#33425a;display:block}
+#hlpDots i.on{background:#ffd34d}
+#hlpTitle{font-size:16px;font-weight:bold;color:#ffd34d;margin:6px 0 2px}
+#hlpText{font-size:14px;line-height:1.8;min-height:80px}
+#hlpTip,#hlpNote{font-size:12px;color:#aab;line-height:1.7;margin-top:6px}
+body[data-inst="ts"] #btnHelp{display:none}
+`;
+document.head.appendChild(style);
+
+const box = document.createElement('div'); box.id = 'hlp';
+box.innerHTML = `<div id="hlpHead"><b>💡 مساعدة قراءة الميرا</b><button id="hlpClose">✕ إغلاق</button></div>
+<div id="hlpBody"><canvas id="hlpC"></canvas><div id="hlpRight">
+<div class="hrow" id="hlpHairs"></div>
+<div class="hrow"><button id="hlpLive">قراءتي الحالية</button><button id="hlpDemo">🎲 مثال جديد</button></div>
+<div id="hlpDots"></div><div id="hlpTitle"></div><div id="hlpText"></div>
+<div class="hrow"><button id="hlpPrev">◀ السابق</button><button id="hlpPlay">⏸ إيقاف</button><button id="hlpNext">التالي ▶</button></div>
+<div id="hlpTip"></div><div id="hlpNote"></div></div></div>`;
+document.body.appendChild(box);
+
+const cv = $('#hlpC');
+const H = { open: false, hair: 'M', wantLive: true, live: false, R: 0, demoStale: true, step: 0, t0: 0, auto: true, raf: 0, base: null, cw: 233, ch: 420, h0: 0, h1: 0, ctx: null };
+const DUR = [1.6, 2.2, 2.2, 3.2, 2.8, 3.2];
+const TITLES = ['الشعيرة', 'الأمتار', 'الديسيمتر', 'السنتيمترات', 'الملّيمترات', 'النتيجة'];
+
+function hairList() {
+  return N().type() === 'tach' ? [['U', 'ق ع'], ['M', 'ق و'], ['L', 'ق س'], ['S', 'S']] : [['U', 'العليا U'], ['M', 'الوسطى M'], ['L', 'السفلى L']];
+}
+const hairName = () => (hairList().find(h => h[0] === H.hair) || ['', ''])[1];
+function liveValue(hair) {
+  const s = N().sight(); if (!s || !s.hit) return null;
+  const v = hair === 'M' ? s.reading : hair === 'U' ? s.U : hair === 'L' ? s.L : s.sr;
+  return Number.isFinite(v) ? v : null;
+}
+function demo() { let mm = Math.round(350 + Math.random() * 3200); if (mm % 10 === 0) mm += 3; return mm / 1000; }
+function vals() {
+  const Rmm = Math.round(H.R * 1000);
+  return { Rmm, m: Math.floor(Rmm / 1000), d: Math.floor((Rmm % 1000) / 100), cc: Math.floor((Rmm % 100) / 10), mm: Rmm % 10 };
+}
+
+function drawStaff(c, s, h0, h1, pat, lab) {
+  const Wd = 144, PW = 76, Hp = (h1 - h0) * 1000, Y = h => (h1 - h) * 1000;
+  c.save(); c.scale(s, s); c.beginPath(); c.rect(0, 0, Wd, Hp); c.clip();
+  c.fillStyle = '#f6f3e6'; c.fillRect(0, 0, Wd, Hp);
+  const i0 = Math.max(0, Math.floor(h0 * 100) - 1), i1 = Math.min(399, Math.ceil(h1 * 100) + 1);
+  c.fillStyle = '#161616';
+  for (let i = i0; i <= i1; i++) if (i % 2 === 0) c.fillRect(0, Y((i + 1) / 100), PW, 10);
+  const k0 = Math.max(0, Math.floor(h0 * 20) - 1), k1 = Math.min(79, Math.ceil(h1 * 20) + 1);
+  if (pat === 'E') for (let k = k0; k <= k1; k++) c.fillRect(k % 2 === 0 ? 0 : PW - 16, Y((5 * k + 5) / 100), 16, 50);
+  else { c.fillStyle = '#c11'; for (let k = k0; k <= k1; k++) c.fillRect(0, Y((5 * k + 5) / 100) - 1, PW, 3); }
+  c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+  const cx = PW + (Wd - PW) / 2;
+  for (let n = Math.max(0, Math.floor(h0 * 10) - 1); n <= Math.min(39, Math.ceil(h1 * 10) + 1); n++) {
+    const m = Math.floor(n / 10), d = n % 10, y0 = Y(n / 10);
+    c.fillStyle = m % 2 === 1 ? '#d11' : '#111';
+    if (lab === 'dots') {
+      c.font = 'bold 56px sans-serif'; c.fillText(String(d), cx, y0 - 12);
+      for (let j = 0; j < m; j++) { c.beginPath(); c.arc(cx + (j - (m - 1) / 2) * 14, y0 - 80, 5, 0, 7); c.fill(); }
+    } else if (n > 0 && lab === 'pair') { c.font = 'bold 46px sans-serif'; c.fillText(`${m}${d}`, cx, y0 - 30); }
+    else if (n > 0 && lab === 'stack') { c.font = 'bold 40px sans-serif'; c.fillText(String(m), cx, y0 - 52); c.fillText(String(d), cx, y0 - 10); }
+    else if (n > 0 && lab === 'dec') { c.font = 'bold 38px sans-serif'; c.fillText(`${m},${d}`, cx, y0 - 30); }
+    c.fillStyle = '#666'; c.fillRect(PW, y0 - 1, Wd - PW, 2);
+  }
+  c.restore();
+}
+
+function rebuild() {
+  const cfg = N().cfg(), R = H.R;
+  let h0 = R - 0.13, h1 = R + 0.13;
+  if (h0 < 0) { h1 -= h0; h0 = 0; } if (h1 > 4) { h0 -= h1 - 4; h1 = 4; }
+  H.h0 = h0; H.h1 = h1;
+  const s = 420 / ((h1 - h0) * 1000), cw = Math.round(144 * s), ch = 420, dpr = Math.min(devicePixelRatio || 1, 2);
+  H.cw = cw; H.ch = ch;
+  cv.style.width = cw + 'px'; cv.style.height = ch + 'px'; cv.width = cw * dpr; cv.height = ch * dpr;
+  H.ctx = cv.getContext('2d'); H.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const base = document.createElement('canvas'); base.width = cw * dpr; base.height = ch * dpr;
+  const c = base.getContext('2d'); c.scale(dpr, dpr);
+  drawStaff(c, s, h0, h1, cfg.pat, cfg.lab);
+  H.base = base;
+}
+
+function rr(c, x, y, w, h, r) {
+  c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+function chip(c, text, x, y, bg, small) {
+  c.font = (small ? 'bold 11px' : 'bold 13px') + ' sans-serif';
+  const w = c.measureText(text).width + (small ? 10 : 16), h = small ? 15 : 22;
+  x = clamp(x, w / 2 + 3, H.cw - w / 2 - 3);
+  c.fillStyle = bg; rr(c, x - w / 2, y - h / 2, w, h, h / 2); c.fill();
+  c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, x, y + 1);
+}
+
+function render(now) {
+  const c = H.ctx, cw = H.cw, ch = H.ch, h0 = H.h0, h1 = H.h1, k = ch / (h1 - h0), lab = N().cfg().lab;
+  const yOf = h => (h1 - h) * k, PWx = cw * 76 / 144, v = vals(), hr = v.Rmm / 1000;
+  const dm = v.m + v.d / 10, cmTop = dm + v.cc / 100;
+  const el = (now - H.t0) / 1000, dur = DUR[H.step], t = clamp(el / dur, 0, 1), S = H.step;
+  if (H.auto && el > dur + 0.8) { go((S + 1) % 6); return; }
+  c.clearRect(0, 0, cw, ch); c.drawImage(H.base, 0, 0, cw, ch);
+  const rng = w => (lab === 'dots' ? (w === 'm' ? [dm + 0.07, dm + 0.092] : [dm + 0.01, dm + 0.068])
+    : lab === 'stack' ? (w === 'm' ? [dm + 0.052, dm + 0.092] : [dm + 0.01, dm + 0.05]) : [dm + 0.03, dm + 0.075]);
+  const hi = (r, col) => { c.fillStyle = col; c.fillRect(PWx, yOf(r[1]), cw - PWx, yOf(r[0]) - yOf(r[1])); };
+  const pulse = 0.25 + 0.15 * Math.sin(now / 180);
+
+  if (S === 1) {
+    hi(rng('m'), `rgba(255,214,0,${0.3 + pulse * 0.5})`);
+    chip(c, v.m > 0 || lab !== 'dots' ? `الأمتار = ${v.m}` : 'لا نقاط: 0 م', cw - 56, clamp(yOf(rng('m')[1]) - 14, 14, ch - 14), '#b45309');
+  }
+  if (S >= 2) {
+    c.strokeStyle = '#2563eb'; c.lineWidth = 3; c.beginPath(); c.moveTo(0, yOf(dm)); c.lineTo(cw * (S === 2 ? ease(t) : 1), yOf(dm)); c.stroke();
+  }
+  if (S === 2) {
+    hi(rng('d'), `rgba(37,99,235,${0.18 + pulse * 0.4})`);
+    chip(c, `ديسيمتر = ${v.d}`, cw - 56, clamp(yOf(dm) + 16, 14, ch - 14), '#2563eb');
+    chip(c, `${v.m}.${v.d} م`, 40, clamp(yOf(dm) - 14, 14, ch - 14), '#2563eb');
+  }
+  if (S >= 3) {
+    const shown = S === 3 ? Math.ceil(ease(t) * v.cc - 1e-9) : v.cc;
+    for (let j = 0; j < shown; j++) {
+      const y0 = yOf(dm + j / 100), y1 = yOf(dm + (j + 1) / 100);
+      c.fillStyle = S === 3 ? 'rgba(16,185,129,.42)' : 'rgba(16,185,129,.22)'; c.fillRect(0, y1, PWx, y0 - y1);
+      if (S === 3) chip(c, String(j + 1), PWx / 2, (y0 + y1) / 2, '#047857', true);
+    }
+    if (S === 3) chip(c, v.cc + ' سم', cw - 46, clamp(yOf(dm + v.cc / 200), 14, ch - 14), '#047857');
+  }
+  if (S >= 4) {
+    const yt = yOf(cmTop + 0.01), yb = yOf(cmTop);
+    c.fillStyle = 'rgba(250,204,21,.45)'; c.fillRect(0, yt, PWx, yb - yt);
+    if (S === 4) {
+      const bx0 = cw - 122, bw = 114, bh = 180, by = clamp(yOf(cmTop + 0.005) - bh / 2, 6, ch - bh - 6);
+      c.fillStyle = 'rgba(250,204,21,.25)'; c.beginPath(); c.moveTo(PWx, yt); c.lineTo(bx0, by + 10); c.lineTo(bx0, by + bh - 10); c.lineTo(PWx, yb); c.closePath(); c.fill();
+      c.fillStyle = '#fffbe6'; c.strokeStyle = '#a16207'; c.lineWidth = 2; rr(c, bx0, by, bw, bh, 8); c.fill(); c.stroke();
+      const tb = by + bh - 14, th = bh - 28;
+      for (let q = 0; q <= 10; q++) {
+        const y = tb - q * th / 10; c.strokeStyle = '#444'; c.lineWidth = q % 5 === 0 ? 2 : 1;
+        c.beginPath(); c.moveTo(bx0 + 10, y); c.lineTo(bx0 + (q % 5 === 0 ? 34 : 24), y); c.stroke();
+        if (q % 5 === 0) { c.fillStyle = '#222'; c.font = '11px sans-serif'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillText(String(q), bx0 + 38, y); }
+      }
+      const e = ease(t), yh = tb - e * v.mm * th / 10;
+      c.strokeStyle = '#e11d48'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(bx0 + 6, yh); c.lineTo(bx0 + bw - 6, yh); c.stroke();
+      chip(c, `${Math.round(e * v.mm)} مم`, bx0 + bw - 34, clamp(yh - 14, by + 14, by + bh - 14), '#e11d48');
+    }
+  }
+  const yh = yOf(hr);
+  c.strokeStyle = '#e11d48'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(0, yh); c.lineTo(S === 0 ? cw * ease(t) : cw, yh); c.stroke();
+  chip(c, hairName(), 38, clamp(yh - 14, 14, ch - 14), '#e11d48');
+  if (S === 5) {
+    c.fillStyle = '#fde047'; rr(c, cw / 2 - 74, 8, 148, 36, 10); c.fill();
+    c.fillStyle = '#111'; c.font = 'bold 22px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(hr.toFixed(3) + ' م', cw / 2, 27);
+  }
+}
+
+function texts(i) {
+  const cfg = N().cfg(), lab = cfg.lab, pat = cfg.pat, v = vals(), hn = hairName();
+  const labT = lab === 'dots' ? (v.m > 0 ? `عدد النقاط الحمراء فوق الرقم = الأمتار: <b>${v.m} م</b>.` : 'لا توجد نقاط حمراء فوق الرقم: القراءة أقل من متر <b>(0 م)</b>.')
+    : lab === 'pair' ? `الرقم المزدوج <b>«${v.m}${v.d}»</b>: الأول = الأمتار (${v.m}) والثاني = الديسيمتر (${v.d}).`
+    : lab === 'stack' ? `رقمان فوق بعض: العلوي = الأمتار (<b>${v.m}</b>) والسفلي = الديسيمتر (${v.d}).`
+    : `الرقم العشري <b>«${v.m},${v.d}»</b>: ${v.m} متر و${v.d} ديسيمتر.`;
+  const dT = lab === 'dots' ? `الرقم الكبير تحت الشعيرة = الديسيمتر: <b>${v.d}</b>. حتى الآن: ${v.m}.${v.d} م.` : `آخر علامة رقمية تحت الشعيرة تعطينا: <b>${v.m}.${v.d} م</b>.`;
+  return [
+    `نحدّد موضع الشعيرة <b>${hn}</b> على الميرا. القراءة = ارتفاع هذه الشعيرة فوق قاعدة الميرا (الصفر عند الأسفل).`,
+    labT, dT,
+    `نعدّ الأشرطة (${pat === 'E' ? 'كل شريط أسود أو أبيض = 1 سم، وكل حرف E = 5 سم' : 'كل شريط = 1 سم والخط الأحمر كل 5 سم'}) صعوداً من علامة الديسيمتر حتى الشعيرة: <b>${v.cc} سم</b>. حتى الآن: ${v.m}.${v.d}${v.cc} م.`,
+    `نقدّر الملّيمتر داخل الشريط الذي فيه الشعيرة: نقسمه إلى 10 أجزاء (1 سم = 10 مم) وتقع الشعيرة عند الجزء <b>${v.mm}</b> ⇒ ${v.mm} مم.`,
+    `القراءة = ${v.m} + 0.${v.d} + 0.0${v.cc} + 0.00${v.mm} = <b>${(v.Rmm / 1000).toFixed(3)} م</b>. اكتبها بالمتر في الخانة المناسبة (${hn}).`
+  ][i];
+}
+function tip() {
+  const ty = N().type(), h = H.hair;
+  if (ty === 'level') return h === 'M' ? 'في الميزان القراءة المعتمدة هي <b>الوسطى</b> (BS/IS/FS).' : 'العليا والسفلى لقياس المسافة: D = 100 × (العليا − السفلى). تأكد أن الوسطى في منتصفهما تقريباً.';
+  if (ty === 'theo') return h === 'M' ? 'الوسطى M تدخل في ΔZ = i + 50·s·sin2α − M.' : 'العليا U والسفلى L: s = U − L ثم D = 100·s·cos²α.';
+  return { U: 'ق ع: D = (ق ع − ق س)×100 = (ق ع − ق و)×200.', M: 'ق و: تدخل في ΔH = (ق ع − ق و)·K + J − S.', L: 'ق س: الشعيرة السفلى، D = (ق ع − ق س)×100.', S: 'S: شعيرة التصويب القصيرة تحت المنتصف، تدخل في ΔH = (ق ع − ق و)·K + J − S.' }[h];
+}
+
+function go(i) {
+  H.step = i; H.t0 = performance.now();
+  $('#hlpTitle').textContent = `${i + 1}/6 — ${TITLES[i]}`;
+  $('#hlpText').innerHTML = texts(i);
+  $('#hlpTip').innerHTML = tip();
+  [...$('#hlpDots').children].forEach((d, j) => d.classList.toggle('on', j === i));
+}
+function resolve() {
+  const n = N(), exam = !!n.cfg().exam, lv = liveValue(H.hair);
+  let note;
+  if (H.wantLive && !exam && lv !== null && lv >= 0.02 && lv <= 3.98) { H.R = Math.round(lv * 1000) / 1000; H.live = true; note = 'تعرض قراءتك الفعلية عند هذه الشعيرة الآن.'; }
+  else {
+    H.live = false; if (!H.R || H.demoStale) { H.R = demo(); H.demoStale = false; }
+    note = exam ? 'وضع الامتحان: مثال توضيحي فقط (لا تُعرض قراءتك الفعلية).' : H.wantLive ? 'لا توجد ميرا ضمن المنظار الآن: هذا مثال توضيحي.' : 'مثال توضيحي.';
+  }
+  $('#hlpNote').textContent = note;
+  $('#hlpLive').classList.toggle('on', H.live);
+  rebuild(); go(0);
+}
+function buildHairs() {
+  const hb = $('#hlpHairs'); hb.innerHTML = '';
+  hairList().forEach(([k, name]) => {
+    const b = document.createElement('button'); b.textContent = name; b.className = k === H.hair ? 'on' : '';
+    b.onclick = () => { H.hair = k; buildHairs(); resolve(); };
+    hb.appendChild(b);
+  });
+  const dots = $('#hlpDots'); if (!dots.children.length) for (let i = 0; i < 6; i++) dots.appendChild(document.createElement('i'));
+}
+function updPlay() { $('#hlpPlay').textContent = H.auto ? '⏸ إيقاف' : '▶ تشغيل'; }
+function frame(now) { if (!H.open) return; render(now); H.raf = requestAnimationFrame(frame); }
+
+function open() {
+  const n = N();
+  if (!n) { alert('تعذّر الاتصال بالمحاكاة: تأكد من تحديث main.js'); return; }
+  if (n.type() === 'ts') { n.say('التاكيومتر الآلي لا يقرأ ميرا: يقيس المسافة بالمنشور (EDM).', 'warn'); return; }
+  H.open = true; H.hair = 'M'; H.wantLive = true; H.auto = true; H.R = 0; H.demoStale = true;
+  box.style.display = 'block'; buildHairs(); resolve(); updPlay();
+  cancelAnimationFrame(H.raf); H.raf = requestAnimationFrame(frame);
+}
+function close() { H.open = false; box.style.display = 'none'; cancelAnimationFrame(H.raf); }
+
+$('#hlpClose').onclick = close;
+$('#hlpPrev').onclick = () => { H.auto = false; updPlay(); go((H.step + 5) % 6); };
+$('#hlpNext').onclick = () => { H.auto = false; updPlay(); go((H.step + 1) % 6); };
+$('#hlpPlay').onclick = () => { H.auto = !H.auto; updPlay(); H.t0 = performance.now(); };
+$('#hlpLive').onclick = () => { H.wantLive = !H.wantLive; resolve(); };
+$('#hlpDemo').onclick = () => { H.wantLive = false; H.demoStale = true; resolve(); };
+addEventListener('keydown', e => { if (e.key === 'Escape' && H.open) close(); });
+
+// الزر في آخر قسم التسجيل (تبويب المسح)
+(function () {
+  const rm = $('#readMsg'); if (!rm || $('#btnHelp')) return;
+  const row = document.createElement('div'); row.className = 'row';
+  const b = document.createElement('button'); b.id = 'btnHelp'; b.className = 'zap'; b.textContent = '💡 مساعدة قراءة الميرا'; b.onclick = open;
+  row.appendChild(b); rm.parentNode.insertBefore(row, rm);
+})();
+import * as THREE from 'three';
+import { scene, groundH, mulberry32, renderer } from './world.js';
+
+const V3 = THREE.Vector3, UP = new V3(0, 1, 0), TAU = Math.PI * 2, SEC = Math.PI / 648000;
+export const R = 0.045, PITCH = 0.0005, EMAX = 0.015, S0 = 0.03, RH = 0.08;
+// ring = حدّ "مُسوّى" (بالدقيقة القوسية)، comp = مدى المعوّض، vial = مدى عرض الفقاعة
+export const TYPES = {
+  level: { name: 'النيفو', trunH: 0.135, ring: 5, comp: 10, vial: 30 },
+  theo: { name: 'التيودوليت', trunH: 0.19, ring: 0.5, comp: 0, vial: 4 },
+  tach: { name: 'التاكيومتر اليدوي', trunH: 0.19, ring: 0.5, comp: 0, vial: 4 },
+  ts: { name: 'التاكيومتر الآلي', trunH: 0.19, ring: 1, comp: 3, vial: 6 }
+};
+export let type = 'level';
+export const TY = () => TYPES[type];
+export const SCREWS = [
+  { n: 'A', x: -0.866 * R, z: 0.5 * R },
+  { n: 'B', x: 0.866 * R, z: 0.5 * R },
+  { n: 'C', x: 0, z: -R }
+];
+export const LEGA = [0, 1, 2].map(i => Math.PI / 2 + i * 2 * Math.PI / 3);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// ---------- أخطاء الجهاز (مخفية وثابتة لكل بذرة وجهاز) ----------
+export const ERR = { on: true, k: 1, v: {} };
+export function setErrors(on, k, sd) {
+  ERR.on = !!on; ERR.k = k || 1;
+  const r = mulberry32((sd || 1) * 977 + 31), pick = mag => (r() < 0.5 ? -1 : 1) * (0.4 + 0.6 * r()) * mag;
+  ERR.v = {
+    level: { c: pick(12) },
+    theo: { c: pick(8), i: pick(8), t: pick(6) },
+    tach: { c: pick(20), i: pick(20), t: pick(12) },
+    ts: { c: pick(4), i: pick(4), t: pick(3), edm0: pick(2.5) / 1000, ppm: pick(2) },
+    staff: pick(3) / 1000
+  };
+}
+const ev = key => (ERR.on && ERR.v[type] ? (ERR.v[type][key] || 0) * ERR.k : 0);
+export const errArc = key => ev(key);
+export const staffZero = () => (ERR.on ? ERR.v.staff * ERR.k : 0);
+export const edmErr = () => ({ zero: ev('edm0'), ppm: ev('ppm') });
+export function errReport() {
+  if (!ERR.on) return ['محاكاة الأخطاء متوقفة.'];
+  const v = ERR.v[type] || {}, k = ERR.k, L = [];
+  if (type === 'level') {
+    L.push(`خطأ خط النظر (collimation) = ${(v.c * k).toFixed(1)}″ ← ${(v.c * k * SEC * 30 * 1000).toFixed(1)} مم عند 30 م`);
+    L.push('بقايا المعوّض ≈ 2% من الميلان على محور النظر');
+  } else {
+    L.push(`خطأ الفهرس الرأسي i = ${(v.i * k).toFixed(1)}″`, `خطأ انحراف خط النظر c = ${(v.c * k).toFixed(1)}″`, `خطأ المحور الأفقي (trunnion) = ${(v.t * k).toFixed(1)}″`);
+    if (type === 'ts') L.push(`ثابت EDM = ${(v.edm0 * k * 1000).toFixed(1)} مم، معامل المقياس = ${(v.ppm * k).toFixed(1)} ppm`);
+  }
+  if (type !== 'ts') L.push(`خطأ صفر الميرا = ${(ERR.v.staff * k * 1000).toFixed(1)} مم`);
+  return L;
+}
+setErrors(true, 1, 1);
+
+const std = (c, r = 0.5, m = 0.1) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+const M = {
+  yellow: std(0xf0b400), dark: std(0x2a2a2e, 0.7, 0), silver: std(0xc4c9cf, 0.35, 0.4), steel: std(0x8d949c, 0.4, 0.4),
+  wood: std(0xc08a45, 0.8, 0), red: std(0xdd2222, 0.6, 0), bub: std(0xe8ffff, 0.2, 0), rubber: std(0x151515, 0.9, 0),
+  thBody: std(0xd9dee6, 0.42, 0.15), thAcc: std(0x2f6fed, 0.4, 0.2),
+  tcBody: std(0x5e7160, 0.5, 0.15), tcAcc: std(0xb4925a, 0.35, 0.5),
+  tsBody: std(0xeef0f3, 0.4, 0.1), tsAcc: std(0xff7a00, 0.45, 0.1),
+  glass: new THREE.MeshPhongMaterial({ color: 0x66b6ff, transparent: true, opacity: 0.45, shininess: 90 }),
+  lens: new THREE.MeshPhongMaterial({ color: 0x4f8fe8, transparent: true, opacity: 0.6, shininess: 120, specular: 0xffffff }),
+  mirror: new THREE.MeshPhongMaterial({ color: 0xe6f1fb, specular: 0xffffff, shininess: 250, side: THREE.DoubleSide }),
+  darkD: std(0x2a2a2e, 0.7, 0)
+};
+M.darkD.side = THREE.DoubleSide;
+const mesh = (geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); return m; };
+const cyl = (r, h, seg = 24, r2 = r) => new THREE.CylinderGeometry(r, r2, h, seg);
+const box = (x, y, z) => new THREE.BoxGeometry(x, y, z);
+const rz = m => { m.rotation.x = Math.PI / 2; return m; };
+
+export const st = {
+  H: 1.75, leg: [0, 0, 0], legLock: [false, false, false], e: [EMAX / 2, EMAX / 2, EMAX / 2],
+  heading: 0, vz: Math.PI / 2, hz0: 0, idx: 0, explode: 0, exTarget: 0, mounted: false, clamp: false, clampV: false, tx: 0, tz: 0, Hc: 1.75
+};
+
+function headState() {
+  let sx = 0, sz = 0, sy = 0;
+  for (let i = 0; i < 3; i++) { const y = st.H + st.leg[i]; sx += y * RH * Math.cos(LEGA[i]); sz += y * RH * Math.sin(LEGA[i]); sy += y; }
+  st.tx = 2 * sx / (3 * RH * RH); st.tz = 2 * sz / (3 * RH * RH); st.Hc = sy / 3;
+  return st;
+}
+export const headTiltDeg = () => Math.atan(Math.hypot(st.tx, st.tz)) * 180 / Math.PI;
+
+const rig = new THREE.Group(); scene.add(rig);
+export const rigPos = rig.position;
+const tripod = new THREE.Group(), headG = new THREE.Group(), instRoot = new THREE.Group(), rotating = new THREE.Group();
+rig.add(tripod, headG, instRoot); instRoot.add(rotating);
+const tripAnchor = new THREE.Object3D(); rig.add(tripAnchor);
+const blob = new THREE.Mesh(new THREE.CircleGeometry(1.0, 32), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
+rig.add(blob);
+
+function numSprite(n, col) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+  const c = cv.getContext('2d');
+  c.fillStyle = col; c.beginPath(); c.arc(32, 32, 29, 0, 7); c.fill();
+  c.fillStyle = '#000'; c.font = 'bold 38px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(n), 32, 35);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false })); s.scale.set(0.16, 0.16, 1); s.renderOrder = 5;
+  return s;
+}
+const LCOL = ['#ff6b6b', '#51cf66', '#4dabf7'];
+
+// ---------- أرجل الحامل ----------
+const FEET = LEGA.map(a => new V3(0.72 * Math.cos(a), 0.03, 0.72 * Math.sin(a)));
+const legs = FEET.map((F, i) => {
+  const up = mesh(cyl(0.03, 1, 10), M.wood), lo = mesh(cyl(0.022, 1, 10), M.steel);
+  const collar = new THREE.Group(); collar.add(mesh(cyl(0.04, 0.08, 12), M.dark));
+  const lever = new THREE.Group(); lever.position.set(0.04, 0, 0); lever.add(mesh(box(0.06, 0.014, 0.024), M.red, 0.03, 0, 0)); collar.add(lever);
+  const shoe = mesh(new THREE.ConeGeometry(0.035, 0.1, 8), M.silver); shoe.rotation.x = Math.PI;
+  const num = numSprite(i + 1, LCOL[i]);
+  tripod.add(up, lo, collar, shoe, num);
+  return { up, lo, collar, lever, shoe, num };
+});
+const _A = new V3(), _P = new V3(), _dir = new V3(), _D = new V3(), _s1 = new V3(), _s2 = new V3(), _n = new V3();
+function orient(m, a, b) {
+  _D.subVectors(b, a); const L = _D.length() || 1e-6;
+  m.position.copy(a).addScaledVector(_D, 0.5);
+  m.quaternion.setFromUnitVectors(UP, _D.multiplyScalar(1 / L)); m.scale.set(1, L, 1);
+}
+function rebuildFeet() {
+  LEGA.forEach((a, i) => {
+    const x = 0.72 * Math.cos(a), z = 0.72 * Math.sin(a);
+    FEET[i].set(x, groundH(rig.position.x + x, rig.position.z + z) - rig.position.y + 0.03, z);
+    legs[i].shoe.position.set(x, FEET[i].y + 0.05, z);
+    legs[i].num.position.set(x * 1.15, FEET[i].y + 0.5, z * 1.15);
+  });
+  _n.crossVectors(_s1.subVectors(FEET[1], FEET[0]), _s2.subVectors(FEET[2], FEET[0])).normalize();
+  if (_n.y < 0) _n.negate();
+  blob.quaternion.setFromUnitVectors(new V3(0, 0, 1), _n);
+  blob.position.set((FEET[0].x + FEET[1].x + FEET[2].x) / 3, (FEET[0].y + FEET[1].y + FEET[2].y) / 3 - 0.012, (FEET[0].z + FEET[1].z + FEET[2].z) / 3);
+}
+function updateLegs() {
+  legs.forEach((lg, i) => {
+    _A.set(RH * Math.cos(LEGA[i]), st.H + st.leg[i] - 0.04, RH * Math.sin(LEGA[i]));
+    _dir.subVectors(FEET[i], _A); const L = _dir.length(); _dir.multiplyScalar(1 / L);
+    const U = Math.min(0.62, L * 0.45); _P.copy(_A).addScaledVector(_dir, U);
+    orient(lg.up, _A, _P); orient(lg.lo, _P, FEET[i]);
+    lg.collar.position.copy(_P); lg.collar.quaternion.setFromUnitVectors(UP, _dir);
+    lg.lever.rotation.z = st.legLock[i] ? 0 : 1.3;
+  });
+}
+
+headG.add(mesh(cyl(0.1, 0.035, 6, 0.085), M.wood, 0, -0.0175, 0));
+headG.add(mesh(cyl(0.09, 0.006, 24), M.silver, 0, -0.003, 0));
+
+// ---------- سجل الأجزاء (لكل جهاز أجزاؤه) ----------
+export const parts = [];
+let tag = 'all';
+function addPart(key, name, desc, obj, parent, home, off) {
+  obj.position.copy(home); parent.add(obj);
+  const p = { key, name, desc, obj, anchor: obj, home: home.clone(), off: off || new V3(), type: tag };
+  parts.push(p); return p;
+}
+export const partsFor = () => parts.filter(p => p.type === 'all' || (p.type === type && !custom[type]));
+parts.push({ key: 'tripod', name: 'الحامل الثلاثي', desc: 'يرفع الجهاز لمستوى النظر. تُباعَد قوائمه وتُغرَز أطرافها، ويُضبط طول كل ساق لجعل رأسه أفقياً تقريباً قبل التسوية الدقيقة بالبراغي.', obj: tripAnchor, anchor: tripAnchor, home: new V3(), off: new V3(), fixed: true, type: 'all' });
+parts.push({ key: 'legclamp', name: 'بزال تثبيت الساق', desc: 'يُحرَّر لتغيير طول الساق (ينزلق القسم السفلي) ثم يُربَط بإحكام. ساق غير مربوطة قد تنزلق وتخرّب التسوية.', obj: legs[0].collar, anchor: legs[0].collar, home: new V3(), off: new V3(), fixed: true, type: 'all' });
+
+function arms(g, mat, h, w) {
+  g.add(new THREE.Mesh(cyl(0.04, h * 1.02), mat));
+  SCREWS.forEach(s => { const b = mesh(box(R + 0.012, h, w), mat, s.x / 2, 0, s.z / 2); b.rotation.y = Math.atan2(-s.z, s.x); g.add(b); });
+}
+
+const hvG = new THREE.Group();
+hvG.add(mesh(cyl(0.012, 0.006), M.dark, 0, 0.003, 0), mesh(new THREE.SphereGeometry(0.0095, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2), M.glass, 0, 0.006, 0));
+const hvBubble = mesh(new THREE.SphereGeometry(0.0028, 10, 8), M.bub, 0, 0.012, 0); hvG.add(hvBubble);
+addPart('headvial', 'كمانة رأس الحامل', 'فقاعة دائرية صغيرة على رأس الحامل تبيّن ميله التقريبي قبل التسوية بالبراغي. تتجه نحو الجهة الأعلى؛ اجعلها قرب المركز بتعديل أطوال الأرجل. كمانة الجهاز نفسه هي الأدق.', hvG, headG, new V3(0, 0.003, 0.083), new V3(0, 0.06, 0.14));
+
+const boltG = new THREE.Group();
+boltG.add(mesh(cyl(0.01, 0.09, 10), M.silver, 0, 0, 0), mesh(cyl(0.028, 0.018, 14), M.dark, 0, -0.05, 0));
+addPart('bolt', 'المسمار المركزي', 'يمرّ من أسفل رأس الحامل إلى قاعدة الجهاز ويثبّته. يُربَط جيداً بعد وضع الجهاز.', boltG, headG, new V3(0, -0.07, 0), new V3(0, -0.2, 0));
+
+const trivetG = new THREE.Group(); arms(trivetG, M.silver, 0.008, 0.022);
+addPart('trivet', 'الصفيحة القاعدية', 'تستند إلى رأس الحامل، وتستقر عليها أطراف براغي التسوية الثلاثة.', trivetG, headG, new V3(0, 0.004, 0), new V3(0, 0.07, 0));
+
+const screwParts = [];
+SCREWS.forEach(s => {
+  const g = new THREE.Group(), shaft = mesh(cyl(0.006, 1, 10), M.silver), knob = new THREE.Group();
+  knob.add(mesh(cyl(0.02, 0.012, 14), M.dark), mesh(box(0.004, 0.003, 0.016), M.red, 0, 0.007, -0.01));
+  g.add(mesh(new THREE.SphereGeometry(0.008, 12, 8), M.silver), shaft, knob);
+  const p = addPart('screw' + s.n, 'برغي التسوية ' + s.n, 'دورانه مع عقارب الساعة يرفع ذلك الطرف من القاعدة. يُدار برغيّان بالإبهامين بعكس بعضهما لتحريك الفقاعة، ثم يُضبط الثالث وحده.', g, rig, new V3(s.x, 0, s.z), new V3(s.x / R * 0.1, 0.17, s.z / R * 0.1));
+  p.shaft = shaft; p.knob = knob; screwParts.push(p);
+});
+
+const tribG = new THREE.Group(); arms(tribG, M.dark, 0.012, 0.026);
+addPart('tribrach', 'قاعدة التسوية', 'تحمل الجهاز وتميل بحسب ارتفاع البراغي الثلاثة، فيميل معها المحور الرأسي للجهاز.', tribG, instRoot, new V3(0, 0.006, 0), new V3(0, 0.30, 0));
+
+function circleMat() {
+  const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 64;
+  const c = cv.getContext('2d'); c.fillStyle = '#ececec'; c.fillRect(0, 0, 1024, 64); c.fillStyle = '#111';
+  for (let d = 0; d < 360; d += 2) {
+    const x = d / 360 * 1024, mj = d % 10 === 0;
+    c.fillRect(x, 0, mj ? 3 : 1.5, mj ? 30 : 18);
+    if (d % 30 === 0) { c.font = 'bold 20px sans-serif'; c.fillText(String(d), x + 4, 54); }
+  }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.MeshStandardMaterial({ map: t, roughness: 0.6 });
+}
+const hcG = new THREE.Group(); hcG.add(new THREE.Mesh(cyl(0.062, 0.012, 48), [circleMat(), M.silver, M.silver]));
+addPart('hcircle', 'الدائرة الأفقية', 'دائرة مدرّجة تُقرأ عليها زوايا الدوران الأفقي (0–360°). في التيودوليت الرقمي والتاكيومتر الآلي تُقرأ على الشاشة، وفي اليدوي من ميكروسكوب القراءة.', hcG, instRoot, new V3(0, 0.018, 0), new V3(0, 0.42, 0));
+
+// ================= أجزاء النيفو =================
+tag = 'level';
+const housing = new THREE.Group();
+housing.add(new THREE.Mesh(cyl(0.05, 0.062, 32), M.yellow), mesh(cyl(0.052, 0.01, 32), M.dark, 0, -0.025, 0), mesh(box(0.07, 0.03, 0.12), M.yellow, 0, 0.045, 0));
+addPart('housing', 'الهيكل الدوّار', 'يحمل المنظار ويدور حول المحور الرأسي فوق الدائرة الأفقية.', housing, rotating, new V3(0, 0.055, 0), new V3(0, 0.54, 0));
+
+const clampG = new THREE.Group(), leverG = new THREE.Group();
+leverG.add(mesh(box(0.03, 0.008, 0.01), M.dark, -0.015, 0, 0)); clampG.add(leverG, mesh(cyl(0.007, 0.012, 10), M.silver));
+addPart('clamp', 'مثبّت الحركة الأفقية', 'عند ربطه يُقفل الدوران الحر للمنظار ويُفعَّل برغي الحركة البطيئة.', clampG, housing, new V3(-0.052, 0, 0), new V3(-0.15, 0, 0));
+
+const slowG = new THREE.Group(); const sk = mesh(cyl(0.016, 0.022, 16), M.dark); sk.rotation.z = Math.PI / 2; slowG.add(sk);
+addPart('slow', 'برغي الحركة البطيئة', 'برغي لانهائي الدوران لضبط اتجاه المنظار بدقة نحو الميرا بعد ربط المثبّت.', slowG, housing, new V3(0.056, 0, 0), new V3(0.15, 0, 0));
+
+const scopeG = new THREE.Group();
+scopeG.add(rz(mesh(cyl(0.04, 0.11, 32), M.yellow)), rz(mesh(cyl(0.0405, 0.012, 32), M.dark)),
+  rz(mesh(cyl(0.03, 0.05, 24), M.dark, 0, 0, 0.07)), rz(mesh(cyl(0.03, 0.04, 24), M.dark, 0, 0, -0.07)),
+  mesh(box(0.07, 0.008, 0.09), M.yellow, 0, 0.044, 0));
+addPart('telescope', 'المنظار', 'تكبيره نحو 24×، وبداخله شعيرات. خط النظر هو الشعيرة الأفقية، وبالمعوّض يصبح أفقياً تلقائياً.', scopeG, rotating, new V3(0, 0.135, 0), new V3(0, 0.76, 0));
+
+const objG = new THREE.Group();
+objG.add(rz(mesh(cyl(0.034, 0.045, 24), M.dark)), rz(mesh(new THREE.CylinderGeometry(0.037, 0.037, 0.035, 24, 1, true), M.darkD, 0, 0, -0.04)));
+const og = mesh(new THREE.CircleGeometry(0.03, 24), M.lens, 0, 0, -0.0235); og.rotation.y = Math.PI; objG.add(og);
+addPart('objective', 'العدسة الشيئية', 'تجمع الضوء من الميرا وتكوّن صورتها في مستوى الشعيرات. الظلّة الأمامية تحميها من وهج الشمس.', objG, scopeG, new V3(0, 0, -0.115), new V3(0, 0, -0.22));
+
+const eyeG = new THREE.Group();
+eyeG.add(rz(mesh(cyl(0.018, 0.06, 20), M.dark)), rz(mesh(cyl(0.024, 0.016, 20), M.rubber, 0, 0, 0.032)), mesh(new THREE.CircleGeometry(0.012, 16), M.glass, 0, 0, 0.0405));
+addPart('eyepiece', 'العدسة العينية', 'تكبّر الصورة والشعيرات. غطاؤها المطاطي يريح العين.', eyeG, scopeG, new V3(0, 0, 0.115), new V3(0, 0, 0.22));
+
+const dioG = new THREE.Group(); dioG.add(rz(mesh(cyl(0.028, 0.014, 14), M.dark)), mesh(box(0.004, 0.003, 0.012), M.red, 0, 0.0285, 0));
+addPart('diopter', 'حلقة ضبط العينية', 'تُدار أولاً حتى تصبح الشعيرات حادّة وسوداء (تعويض نظر المراقب).', dioG, scopeG, new V3(0, 0, 0.085), new V3(0, 0.09, 0.1));
+
+const focG = new THREE.Group(); const fk = mesh(cyl(0.024, 0.018, 14), M.dark); fk.rotation.z = Math.PI / 2; focG.add(fk);
+const fc = mesh(cyl(0.01, 0.006, 10), M.silver, 0.011, 0, 0); fc.rotation.z = Math.PI / 2; focG.add(fc);
+addPart('focus', 'برغي التبئير', 'يحرّك عدسة داخلية لتصبح صورة الميرا واضحة على مستوى الشعيرات (لإزالة البارالاكس).', focG, scopeG, new V3(0.05, 0, -0.015), new V3(0.16, 0, 0));
+
+const sightG = new THREE.Group();
+sightG.add(rz(mesh(cyl(0.007, 0.1, 12), M.dark)), mesh(box(0.012, 0.014, 0.03), M.dark, 0, -0.01, 0),
+  mesh(new THREE.TorusGeometry(0.0095, 0.0015, 8, 16), M.silver, 0, 0, -0.05), mesh(new THREE.TorusGeometry(0.006, 0.0015, 8, 16), M.silver, 0, 0, 0.05));
+addPart('sight', 'المنظار الأولي', 'منظار صغير (هدّافة) فوق الجهاز للتوجيه التقريبي نحو الميرا: انظر عبر الحلقة الخلفية ثم الأمامية حتى ترى الميرا، ثم انتقل للمنظار الرئيسي.', sightG, scopeG, new V3(0, 0.058, 0), new V3(0, 0.22, 0));
+
+const vialG = new THREE.Group();
+vialG.add(mesh(cyl(0.015, 0.008), M.dark, 0, 0.004, 0), mesh(new THREE.SphereGeometry(0.0125, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), M.glass, 0, 0.008, 0));
+const vr = new THREE.Mesh(new THREE.RingGeometry(0.0035, 0.0045, 24), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+vr.rotation.x = -Math.PI / 2; vr.position.y = 0.0085; vialG.add(vr);
+const bubble = mesh(new THREE.SphereGeometry(0.0035, 10, 8), M.bub, 0, 0.0165, 0); vialG.add(bubble);
+const vialPart = addPart('vial', 'الفقاعة الدائرية', 'تُظهر أفقية الجهاز. تتجه الفقاعة نحو الجهة الأعلى؛ اجعلها داخل الدائرة الصغيرة.', vialG, scopeG, new V3(-0.026, 0.048, -0.02), new V3(-0.1, 0.1, -0.06));
+
+const mirG = new THREE.Group();
+const plate = mesh(box(0.034, 0.002, 0.03), M.mirror); plate.rotation.x = 3 * Math.PI / 4; mirG.add(plate);
+mirG.add(mesh(box(0.003, 0.032, 0.003), M.dark, 0.0175, -0.016, 0), mesh(box(0.003, 0.032, 0.003), M.dark, -0.0175, -0.016, 0));
+addPart('mirror', 'مرآة الفقاعة', 'مرآة مائلة 45° فوق الفقاعة تعكس صورتها نحو جهة العدسة العينية، فيراها المراقب وهو ينظر في المنظار دون أن يتحرك.', mirG, scopeG, new V3(-0.026, 0.08, -0.012), new V3(-0.1, 0.24, 0.06));
+
+const compG = new THREE.Group();
+compG.add(mesh(box(0.028, 0.028, 0.05), M.silver), mesh(cyl(0.004, 0.02, 8), M.dark, 0, -0.024, 0), mesh(new THREE.SphereGeometry(0.007, 10, 8), M.red, 0, -0.038, 0));
+addPart('comp', 'المعوّض الآلي', 'ينتج خط نظر أفقياً تلقائياً حين يكون ميلان المحور ضمن ±10′. خارج هذا المدى يتوقف وتصبح القراءات خاطئة.', compG, scopeG, new V3(0, 0, 0.02), new V3(0, -0.14, 0.1));
+
+// ================= التيودوليت والتاكيومترات =================
+// NIVO-V5 — نماذج أكثر واقعية + انعكاسات معدنية + دعم نماذج Blender المخصّصة
+export const custom = {};
+const ttTel = {}, plateBubs = {};
+let idxBub = null;
+const tm = (c, r, m) => { const x = std(c, r, m); x.envMapIntensity = 0.9; return x; };
+const MT = {
+  dark: tm(0x26282c, 0.55, 0.2), silver: tm(0xd2d6db, 0.25, 0.85), steel: tm(0x9aa1a9, 0.3, 0.8), rubber: tm(0x121212, 0.9, 0),
+  thBody: tm(0xcfd6de, 0.38, 0.35), thAcc: tm(0x2f6fed, 0.35, 0.3),
+  tcBody: tm(0x56695a, 0.45, 0.3), tcAcc: tm(0xc9a45f, 0.3, 0.8),
+  tsBody: tm(0xf1f3f6, 0.35, 0.2), tsAcc: tm(0xff7a00, 0.4, 0.2)
+};
+MT.darkD = MT.dark.clone(); MT.darkD.side = THREE.DoubleSide;
+import('/three/examples/jsm/environments/RoomEnvironment.js').then(mod => {
+  const env = new THREE.PMREMGenerator(renderer).fromScene(new mod.RoomEnvironment(renderer), 0.04).texture;
+  Object.values(MT).forEach(x => { x.envMap = env; x.needsUpdate = true; });
+}).catch(() => { /* بدون انعكاسات */ });
+
+// مقبض مسنّن (knurled)
+function knurl(r, h, n, mat) {
+  const g = new THREE.Group(); g.add(new THREE.Mesh(cyl(r - 0.0008, h, 24), mat));
+  for (let i = 0; i < n; i++) { const a = i / n * TAU, b = mesh(box(0.0016, h, 0.0022), mat, Math.cos(a) * r, 0, Math.sin(a) * r); b.rotation.y = -a; g.add(b); }
+  return g;
+}
+// دعامتان على شكل حرف U مدرّجتان بحواف منحنية
+function uBracket(a1, H, gap, yb, D, mat) {
+  const s = new THREE.Shape(), a0 = a1 + 0.008, g = gap / 2, r = 0.01;
+  s.moveTo(-a0, 0); s.lineTo(a0, 0); s.lineTo(a1, H - r); s.quadraticCurveTo(a1 - 0.002, H, a1 - r - 0.002, H);
+  s.lineTo(g + r, H); s.quadraticCurveTo(g, H, g, H - r); s.lineTo(g, yb); s.lineTo(-g, yb); s.lineTo(-g, H - r);
+  s.quadraticCurveTo(-g, H, -g - r, H); s.lineTo(-a1 + r + 0.002, H); s.quadraticCurveTo(-a1 + 0.002, H, -a1, H - r); s.lineTo(-a0, 0);
+  const geo = new THREE.ExtrudeGeometry(s, { depth: D, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 2, curveSegments: 6 });
+  geo.translate(0, 0, -D / 2);
+  return new THREE.Mesh(geo, mat);
+}
+function screenTex(ts) {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 192;
+  const x = c.getContext('2d');
+  x.fillStyle = '#1b1f26'; x.fillRect(0, 0, 128, 192);
+  x.fillStyle = '#8fe3a0'; x.fillRect(8, 8, 112, 72);
+  x.fillStyle = '#12301c'; x.font = 'bold 14px monospace';
+  x.fillText('Hz 0°00′00″', 14, 30); x.fillText('V  90°00′00″', 14, 50); if (ts) x.fillText('SD ---.---', 14, 70);
+  x.fillStyle = '#9aa4b4';
+  for (let r = 0; r < 4; r++) for (let q = 0; q < 3; q++) x.fillRect(12 + q * 38, 94 + r * 22, 30, 15);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+function buildTT(kind) {
+  const ts = kind === 'ts', tc = kind === 'tach';
+  const body = ts ? MT.tsBody : tc ? MT.tcBody : MT.thBody, acc = ts ? MT.tsAcc : tc ? MT.tcAcc : MT.thAcc;
+  tag = kind;
+  // القاعدة الدوّارة: قرص + حلقة مسننة للحركة السفلية + دعامتا U
+  const al = new THREE.Group();
+  al.add(new THREE.Mesh(cyl(0.064, 0.05, 40, 0.072), body), mesh(cyl(0.075, 0.006, 40), acc, 0, -0.018, 0));
+  const kr = knurl(0.0745, 0.014, 40, MT.dark); kr.position.y = -0.03; al.add(kr);
+  const br = uBracket(ts ? 0.096 : 0.092, 0.161, 0.116, 0.05, ts ? 0.1 : 0.085, body); br.position.set(0, 0.025, 0); al.add(br);
+  const lc = mesh(cyl(0.034, 0.012, 32), body, -0.1, 0.141, 0); lc.rotation.z = Math.PI / 2;
+  const lp = mesh(cyl(0.013, 0.014, 16), acc, -0.109, 0.141, 0); lp.rotation.z = Math.PI / 2;
+  al.add(lc, lp);
+  for (const sx of [-1, 1]) al.add(mesh(box(0.004, 0.08, 0.05), acc, sx * 0.0995, 0.07, 0));
+  addPart(kind + 'al', 'القاعدة الدوّارة والدعامتان', 'تدور حول المحور الرأسي فوق الدائرة الأفقية، وتحمل الدعامتين اللتين يدور بينهما المنظار حول المحور الأفقي (trunnion). الحلقة المسننة السفلية للحركة الأفقية السفلى.', al, rotating, new V3(0, 0.049, 0), new V3(0, 0.54, 0));
+
+  if (ts) {
+    const hd = new THREE.Group();
+    [-0.028, 0.028].forEach(z => { const arc = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.008, 8, 28, Math.PI), body); arc.position.z = z; hd.add(arc); });
+    hd.add(mesh(box(0.06, 0.016, 0.07), body, 0, 0.072, 0));
+    addPart('tshd', 'مقبض الحمل', 'لحمل الجهاز. لا تحمله من المنظار أبداً.', hd, al, new V3(0, 0.186, 0), new V3(0, 0.2, 0));
+    const bt = new THREE.Group(); bt.add(mesh(box(0.03, 0.08, 0.07), MT.dark), mesh(box(0.004, 0.05, 0.05), acc, 0.016, 0, 0));
+    addPart('tsbat', 'البطارية', 'حزمة بطارية قابلة للشحن تُركَّب على الدعامة اليمنى. أطفئ الجهاز قبل نزعها.', bt, al, new V3(0.118, 0.05, 0), new V3(0.18, 0, 0));
+  }
+  if (!ts) {
+    const pb = new THREE.Group(), tube = mesh(cyl(0.008, 0.052, 12), M.glass); tube.rotation.z = Math.PI / 2;
+    const bb = mesh(new THREE.SphereGeometry(0.0042, 10, 8), M.bub); bb.scale.x = 2.4; plateBubs[kind] = bb;
+    pb.add(mesh(box(0.06, 0.008, 0.02), MT.dark, 0, -0.008, 0), tube, bb);
+    addPart(kind + 'bub', 'كمانة الصفيحة (الأنبوبية)', 'حساسيتها نحو 40″ للتدريجة وموازية للمحور الأفقي. تُسوّى بتوجيهها موازية لبرغيَّين ثم تدوير الجهاز 90° وضبط البرغي الثالث، وتُعاد حتى تبقى في المركز عند أي اتجاه.', pb, al, new V3(0, 0.083, -0.015), new V3(0, 0.12, -0.1));
+  }
+  if (!tc) {
+    const dp = new THREE.Group(), scr = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.075), new THREE.MeshBasicMaterial({ map: screenTex(ts) }));
+    scr.rotation.y = -Math.PI / 2; scr.position.x = -0.0045;
+    dp.add(mesh(box(0.008, 0.085, 0.058), MT.dark), scr);
+    addPart(kind + 'dp', ts ? 'الشاشة ولوحة المفاتيح' : 'الشاشة الرقمية', ts ? 'تعرض Hz وV وSD وميلان المحور، وتسجّل القياسات وتحسب الإحداثيات.' : 'تعرض Hz وV بدقة 5″ مع مفتاح 0SET لتصفير الزاوية الأفقية.', dp, al, new V3(-0.115, 0.1, 0), new V3(-0.16, 0, 0));
+  }
+  if (tc) {
+    // كمانة الدائرة الرأسية (الفهرس) + برغي الفهرس
+    const iv = new THREE.Group(), tb = mesh(cyl(0.007, 0.06, 12), M.glass); tb.rotation.x = Math.PI / 2;
+    idxBub = mesh(new THREE.SphereGeometry(0.0038, 10, 8), M.bub); idxBub.scale.z = 2.4;
+    const kn = knurl(0.012, 0.02, 16, MT.dark); kn.rotation.z = Math.PI / 2; kn.position.z = 0.05;
+    iv.add(mesh(box(0.012, 0.016, 0.07), MT.dark, 0, -0.01, 0), tb, idxBub, kn);
+    addPart('tcidx', 'كمانة الدائرة الرأسية وبرغي الفهرس', 'كمانة الفهرس: يجب تمركزها ببرغي الفهرس قبل كل قراءة رأسية، فهي التي تحدّد صفر الدائرة الرأسية. خطؤها يدخل مباشرة في زاوية V.', iv, al, new V3(0.113, 0.06, -0.005), new V3(0.17, 0.05, 0));
+    // ميكروسكوب القراءة
+    const mic = new THREE.Group(), mt = rz(mesh(cyl(0.011, 0.09, 14), MT.dark)); mt.rotation.x = Math.PI / 2 - 0.5;
+    mic.add(mt, mesh(cyl(0.015, 0.012, 14), MT.rubber, 0, 0.0216, 0.0396));
+    addPart('tcmic', 'ميكروسكوب قراءة الدوائر', 'ينظر منه المراقب إلى الدائرتين الأفقية والرأسية فيرى تدريج الدرجات ومقياس الدقائق ويقرأ يدوياً.', mic, al, new V3(-0.1, 0.12, 0.05), new V3(-0.16, 0.1, 0.1));
+    // مرآة الإضاءة
+    const mi = new THREE.Group(), md = mesh(cyl(0.024, 0.004, 20), M.mirror); md.rotation.x = 0.8; mi.add(md, mesh(cyl(0.004, 0.05, 8), MT.steel, 0, -0.025, 0));
+    addPart('tcmir', 'مرآة الإضاءة', 'تعكس ضوء النهار إلى داخل الجهاز لإضاءة تدريج الدوائر قبل القراءة.', mi, al, new V3(0.085, 0.035, 0.07), new V3(0.16, -0.05, 0.1));
+  }
+  const tg = new THREE.Group();
+  [[-0.005, 0.035, acc], [-0.005, -0.03, MT.dark], [0.035, 0.035, MT.dark], [0.035, -0.03, acc]].forEach(([y, z, mm]) => { const k = knurl(0.012, 0.018, 16, mm); k.rotation.z = Math.PI / 2; k.position.set(0.112, y, z); tg.add(k); });
+  addPart(kind + 'tg', 'مثبّتات وبراغي الحركة البطيئة', 'مثبّت وبرغي حركة بطيئة للأفقي ومثلهما للرأسي: اربط المثبّت أولاً ثم دقّق التوجيه بالبرغي.', tg, al, new V3(0, 0, 0), new V3(0.16, 0, 0));
+  const pl = new THREE.Group(); pl.add(mesh(cyl(0.012, 0.045, 12), MT.dark), mesh(cyl(0.006, 0.02, 8), ts ? M.red : MT.silver, 0, -0.03, 0));
+  addPart(kind + 'pl', ts ? 'الشاقول الليزري' : 'الشاقول البصري', ts ? 'يسقط نقطة ليزر على العلامة الأرضية لمركزة الجهاز فوقها.' : 'ينظر منه المراقب إلى العلامة الأرضية لمركزة الجهاز فوقها.', pl, al, new V3(0, -0.012, 0.06), new V3(0, -0.12, 0.1));
+
+  // المنظار على المحور الأفقي (يدور رأسياً)
+  const tel = new THREE.Group(); ttTel[kind] = tel;
+  const tr = ts ? 0.034 : 0.03, ax = mesh(cyl(0.008, 0.2, 10), MT.steel); ax.rotation.z = Math.PI / 2;
+  tel.add(rz(mesh(cyl(tr, 0.17, 28), body)), ax, rz(mesh(cyl(tr + 0.004, 0.012, 28), acc)));
+  addPart(kind + 'tel', 'المنظار', ts ? 'يدور رأسياً (الوجه I والوجه II) ويشترك مع EDM في المحور البصري. الشعيرات للتوجيه، والتكبير نحو 30×.' : tc ? 'منظار ذاتي الاختزال: الشبكة فيها شعيرة رأسية وأربع شعيرات أفقية (ق ع وق و وق س وS) وقطعة مائلة تخرج من الشعيرة العليا. المسافة الأفقية D = (ق ع − ق س)×100 بلا حاجة لـ cos²α.' : 'يدور رأسياً (الوجه I والوجه II). فيه شعيرة رأسية وأفقية وشعيرتا ستاديا: D = 100·s·cos²α و V = 50·s·sin2α.', tel, rotating, new V3(0, 0.19, 0), new V3(0, 0.8, 0));
+  const ob = new THREE.Group();
+  ob.add(rz(mesh(cyl(tr, 0.06, 28, tr + 0.012), MT.dark)), rz(mesh(new THREE.CylinderGeometry(tr + 0.014, tr + 0.014, 0.04, 28, 1, true), MT.darkD, 0, 0, -0.045)));
+  const og2 = mesh(new THREE.CircleGeometry(tr + 0.008, 28), M.lens, 0, 0, -0.0305); og2.rotation.y = Math.PI; ob.add(og2);
+  addPart(kind + 'ob', 'العدسة الشيئية', 'مخروطية تجمع الضوء من الهدف وتكوّن صورته في مستوى الشعيرات. الظلّة الأمامية تحميها من الوهج.', ob, tel, new V3(0, 0, -0.115), new V3(0, 0, -0.22));
+  const ey = new THREE.Group(); ey.add(rz(mesh(cyl(0.016, 0.07, 20, 0.024), MT.dark)), rz(mesh(cyl(0.027, 0.016, 20), MT.rubber, 0, 0, 0.038)));
+  addPart(kind + 'ey', 'العدسة العينية', 'تكبّر الصورة والشعيرات؛ تُضبط أولاً حتى تصبح الشعيرات حادّة. غطاؤها المطاطي يريح العين.', ey, tel, new V3(0, 0, 0.13), new V3(0, 0, 0.22));
+  const fr = new THREE.Group(), fk2 = knurl(0.022, 0.016, 26, MT.dark); fk2.rotation.z = Math.PI / 2; fk2.position.x = 0.042;
+  fr.add(fk2, rz(mesh(cyl(tr + 0.006, 0.02, 28), acc)));
+  addPart(kind + 'fr', 'برغي التبئير', 'يُدار حتى تتضح صورة الهدف على مستوى الشعيرات (بلا بارالاكس).', fr, tel, new V3(0, 0, -0.035), new V3(0, 0.14, 0));
+  const vc = new THREE.Group(), vd = new THREE.Mesh(tc ? cyl(0.05, 0.008, 44) : cyl(0.045, 0.008, 32), tc ? [circleMat(), MT.silver, MT.silver] : body);
+  vd.rotation.z = Math.PI / 2; vc.add(vd);
+  addPart(kind + 'vc', 'الدائرة الرأسية', 'تدور مع المنظار وتعطي زاوية الزنت Z (0° للأعلى و90° أفقياً). في الوجه II تقرأ 360° − Z.', vc, tel, new V3(0.104, 0, 0), new V3(0.16, 0, 0));
+  const sg = new THREE.Group(); sg.add(rz(mesh(cyl(0.006, 0.1, 10), MT.dark)), mesh(new THREE.TorusGeometry(0.008, 0.0015, 8, 16), MT.silver, 0, 0, -0.05));
+  addPart(kind + 'sg', 'المنظار الأولي', 'هدّافة فوق المنظار للتوجيه التقريبي قبل النظر في المنظار الرئيسي.', sg, tel, new V3(0, tr + 0.012, 0), new V3(0, 0.2, 0));
+  if (ts) {
+    const ed = new THREE.Group();
+    ed.add(mesh(box(0.05, 0.03, 0.04), MT.dark), mesh(box(0.022, 0.02, 0.004), M.lens, -0.012, 0, -0.021), mesh(box(0.022, 0.02, 0.004), M.lens, 0.012, 0, -0.021));
+    addPart('tsed', 'وحدة قياس المسافة EDM', 'ترسل حزمة تحت حمراء إلى المنشور العاكس وتحسب المسافة المائلة من زمن/طور عودتها. لا تعيد إشارة إن لم تكن الشعيرة على المنشور.', ed, tel, new V3(0, tr + 0.02, -0.1), new V3(0, 0.14, -0.2));
+    const cp = new THREE.Group();
+    cp.add(mesh(box(0.028, 0.028, 0.05), MT.silver), mesh(cyl(0.004, 0.02, 8), MT.dark, 0, -0.024, 0), mesh(new THREE.SphereGeometry(0.007, 10, 8), M.red, 0, -0.038, 0));
+    addPart('tscp', 'المعوّض ثنائي المحور', 'يقيس الميلان في اتجاهين ويصحّح قراءة الزاوية الرأسية ضمن ±3′. خارج المدى تظهر رسالة خطأ وتعود القراءات غير مصحّحة.', cp, tel, new V3(0, 0, 0.02), new V3(0, -0.15, 0.1));
+  }
+}
+buildTT('theo'); buildTT('tach'); buildTT('ts');
+tag = 'all';
+
+// ---------- التحديث ----------
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new V3(), _f = new V3(), _u = new V3(), _o = new V3();
+let T = { gx: 0, gz: 0, arc: 0 };
+export const getTilt = () => T;
+// قراءة كمانة الدائرة الرأسية (بالدقائق القوسية): ميل الجهاز على محور النظر + برغي الفهرس
+export const indexBubble = () => (((T.gx * Math.sin(st.heading) - T.gz * Math.cos(st.heading)) + st.idx) * 3437.75);
+
+function sanitize() {
+  if (!Number.isFinite(st.heading)) st.heading = 0;
+  if (!Number.isFinite(st.vz)) st.vz = Math.PI / 2;
+  if (!Number.isFinite(st.H)) st.H = 1.45;
+  for (let i = 0; i < 3; i++) { if (!Number.isFinite(st.e[i])) st.e[i] = EMAX / 2; if (!Number.isFinite(st.leg[i])) st.leg[i] = 0; }
+}
+
+export function update(dt) {
+  sanitize();
+  st.explode += (st.exTarget - st.explode) * Math.min(1, dt * 4);
+  if (Math.abs(st.exTarget - st.explode) < 0.001) st.explode = st.exTarget;
+  const hs = headState();
+  headG.position.set(0, hs.Hc, 0);
+  headG.quaternion.setFromUnitVectors(UP, _v.set(-hs.tx, 1, -hs.tz).normalize());
+  tripAnchor.position.set(0.3, hs.Hc * 0.55, 0.45);
+  updateLegs();
+  headG.getWorldQuaternion(_q);
+  _v.set(hs.tx, 0, hs.tz).multiplyScalar(0.18).applyQuaternion(_q.invert());
+  let hx = _v.x, hz = _v.z; const hl = Math.hypot(hx, hz);
+  if (hl > 0.0065) { hx *= 0.0065 / hl; hz *= 0.0065 / hl; }
+  hvBubble.position.set(hx, 0.006 + Math.sqrt(0.0095 ** 2 - (hx * hx + hz * hz)) - 0.0035, hz);
+  let sx = 0, sz = 0, sy = 0;
+  SCREWS.forEach((s, i) => {
+    const y0 = hs.Hc + hs.tx * s.x + hs.tz * s.z + 0.008, len = S0 + st.e[i], p = screwParts[i];
+    p.home.set(s.x, y0, s.z);
+    p.shaft.scale.y = len; p.shaft.position.y = len / 2;
+    p.knob.position.y = len + 0.018; p.knob.rotation.y = -st.e[i] / PITCH * 2 * Math.PI;
+    const y = y0 + len; sx += y * s.x; sz += y * s.z; sy += y;
+  });
+  const gx = 2 * sx / (3 * R * R), gz = 2 * sz / (3 * R * R);
+  T = { gx, gz, arc: Math.hypot(gx, gz) * 3437.75 };
+  instRoot.position.set(0, sy / 3, 0);
+  instRoot.quaternion.setFromUnitVectors(UP, _v.set(-gx, 1, -gz).normalize());
+  rotating.rotation.y = -st.heading;
+  const tr = Math.PI / 2 - st.vz;
+  ttTel.theo.rotation.x = tr; ttTel.tach.rotation.x = tr; ttTel.ts.rotation.x = tr;
+  const pbb = plateBubs[type];
+  if (pbb) { const b = gx * Math.cos(st.heading) + gz * Math.sin(st.heading); pbb.position.x = clamp(b * 10.3, -0.02, 0.02); }
+  if (type === 'tach' && idxBub) idxBub.position.z = clamp(indexBubble() * 0.0035, -0.022, 0.022);
+  for (const p of parts) if (!p.fixed) p.obj.position.copy(p.home).addScaledVector(p.off, st.explode);
+  vialPart.obj.getWorldQuaternion(_q);
+  _v.set(gx, 0, gz).multiplyScalar(1.375).applyQuaternion(_q.invert());
+  let bx = _v.x, bz = _v.z; const bl = Math.hypot(bx, bz);
+  if (bl > 0.0075) { bx *= 0.0075 / bl; bz *= 0.0075 / bl; }
+  bubble.position.set(bx, 0.008 + Math.sqrt(0.0125 ** 2 - (bx * bx + bz * bz)) - 0.004, bz);
+}
+
+// وضع كاميرا المنظار (مع أخطاء خط النظر وانحراف المحور)
+export function scopePose(cam) {
+  rig.updateMatrixWorld(true);
+  const ty = TY(), tt = type !== 'level';
+  _o.set(0, ty.trunH, 0); instRoot.localToWorld(_o);
+  _q2.multiplyQuaternions(instRoot.quaternion, rotating.quaternion);
+  cam.position.copy(_o);
+  if (tt) {
+    const c = ev('c') * SEC, tz = ev('t') * SEC, ph = st.vz;
+    _f.set(Math.sin(c), Math.cos(ph) * Math.cos(c), -Math.sin(ph) * Math.cos(c));
+    const fx0 = _f.x * Math.cos(tz) - _f.y * Math.sin(tz), fy0 = _f.x * Math.sin(tz) + _f.y * Math.cos(tz);
+    _f.x = fx0; _f.y = fy0; _f.applyQuaternion(_q2);
+    _u.set(0, 1, 0).applyQuaternion(_q2); cam.up.copy(_u);
+  } else {
+    _f.set(0, 0, -1).applyQuaternion(_q2);
+    if (T.arc <= ty.comp) {
+      _f.y = 0; _f.normalize();
+      const ga = T.gx * Math.sin(st.heading) - T.gz * Math.cos(st.heading);
+      const el = ev('c') * SEC + 0.02 * ga, ce = Math.cos(el);
+      _f.set(_f.x * ce, Math.sin(el), _f.z * ce); cam.up.set(0, 1, 0);
+    } else { _u.set(0, 1, 0).applyQuaternion(_q2); cam.up.copy(_u); }
+  }
+  _f.add(_o); cam.lookAt(_f);
+}
+
+// قراءات الدوائر كما يراها المراقب
+export function readings() {
+  const ty = TY(), face = st.vz < Math.PI ? 1 : 2;
+  let v = st.vz + ev('i') * SEC, comp = false;
+  if (type === 'ts' && T.arc <= ty.comp) {
+    _q.multiplyQuaternions(instRoot.quaternion, rotating.quaternion).multiply(ttTel.ts.quaternion);
+    _f.set(0, 0, -1).applyQuaternion(_q);
+    const z = Math.acos(clamp(_f.y, -1, 1));
+    v = (face === 1 ? z : TAU - z) + ev('i') * SEC; comp = true;
+  }
+  if (type === 'tach') v = st.vz + st.idx + ev('i') * SEC + 0.001749;
+  return { hz: (((st.heading - st.hz0) % TAU) + TAU) % TAU, v: ((v % TAU) + TAU) % TAU, face, comp };
+}
+
+// ---------- واجهة برمجية ----------
+export function setType(t) {
+  type = t;
+  parts.forEach(p => { if (p.type !== 'all') p.obj.visible = p.type === t && !custom[p.type]; });
+}
+export function setRig(x, z) { rig.position.set(x, groundH(x, z), z); rebuildFeet(); }
+export function setHeight(h) { st.H = clamp(h, 1.1, 1.8); }
+export function setLeg(i, m) { st.leg[i] = clamp(m, -0.025, 0.025); }
+export function setLegLock(i, b) { st.legLock[i] = b; }
+export function setExplode(on) { st.exTarget = on ? 1 : 0; }
+export function setMounted(b) { st.mounted = b; instRoot.visible = b; trivetG.visible = b; screwParts.forEach(p => (p.obj.visible = b)); }
+export function setClamp(b) { st.clamp = b; leverG.rotation.z = b ? 0 : -0.9; }
+export function nudgeIdx(arcmin) { st.idx = clamp(st.idx + arcmin / 3437.75, -25 / 3437.75, 25 / 3437.75); }
+export function turnScrew(i, turns) {
+  const n = st.e[i] + turns * PITCH;
+  st.e[i] = clamp(n, 0, EMAX);
+  return n >= 0 && n <= EMAX;
+}
+export function levelLegsNow() { st.leg = [0, 0, 0]; }
+export function levelScrewsNow() {
+  const hs = headState();
+  st.e = SCREWS.map(s => clamp(EMAX / 2 - (hs.tx * s.x + hs.tz * s.z), 0, EMAX));
+}
+// عند التركيب لا يكون الجهاز مُسوّى: براغي التسوية في أوضاع عشوائية
+function randomizeScrews() { st.e = st.e.map(() => clamp(EMAX / 2 + (Math.random() - 0.5) * 0.004, 0, EMAX)); }
+export function mount() { if (st.mounted) return; setMounted(true); randomizeScrews(); }
+export function quickMount() { st.H = 1.45; st.legLock = [true, true, true]; mount(); }
+export function quickLevel() {
+  if (!st.mounted) quickMount();
+  st.leg = [0, 0, 0]; st.e = [EMAX / 2, EMAX / 2, EMAX / 2]; st.legLock = [true, true, true];
+}
+// legs: 'random' | 'level' ، state: 'off' | 'mounted' | 'leveled'
+export function reset(legs, state) {
+  st.explode = 0; st.exTarget = 0; st.heading = 0; st.vz = Math.PI / 2; st.hz0 = Math.random() * TAU; st.clampV = false;
+  st.idx = (Math.random() - 0.5) * 2 * (8 / 3437.75);
+  st.e = [EMAX / 2, EMAX / 2, EMAX / 2];
+  setMounted(false); setClamp(false);
+  if (legs === 'level') { st.H = 1.45; st.leg = [0, 0, 0]; st.legLock = [true, true, true]; }
+  else { st.H = 1.75; st.leg = [0, 1, 2].map(() => (Math.random() - 0.5) * 0.008); st.legLock = [false, false, false]; }
+  if (state === 'mounted' || state === 'leveled') {
+    const keep = st.leg.slice();
+    quickMount();
+    st.leg = legs === 'level' ? [0, 0, 0] : keep;
+  }
+  if (state === 'leveled') quickLevel();
+}
+rebuildFeet();
+setType('level');
+reset('random', 'off');
+export { rig, instRoot, rotating, ttTel };
+import * as THREE from 'three';
+
+const V3 = THREE.Vector3;
+export const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: (window.devicePixelRatio || 1) < 2.5, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+export function setQuality(pr) { renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pr)); }
+
+export const scene = new THREE.Scene();
+const HOR = new THREE.Color(0xcfe3f2);
+scene.background = HOR.clone();
+scene.fog = new THREE.Fog(HOR, 110, 560);
+const hemi = new THREE.HemisphereLight(0xe8f3ff, 0x5b6b3a, 1.5); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff0d0, 2.4); sun.position.set(60, 90, 40); scene.add(sun);
+
+// ---------- أدوات ----------
+export function mulberry32(a) {
+  return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const hash = (i, j) => { let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967295; };
+function vnoise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z), xf = x - xi, zf = z - zi;
+  const a = hash(xi, zi), b = hash(xi + 1, zi), c = hash(xi, zi + 1), d = hash(xi + 1, zi + 1);
+  const u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, z) { let s = 0, a = 0.5, f = 1; for (let i = 0; i < 4; i++) { s += a * vnoise(x * f, z * f); f *= 2; a *= 0.5; } return s; }
+
+export function cylBetween(a, b, r, mat, seg = 8) {
+  const d = new V3().subVectors(b, a), L = d.length();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, L, seg), mat);
+  m.position.copy(a).addScaledVector(d, 0.5);
+  m.quaternion.setFromUnitVectors(new V3(0, 1, 0), d.normalize());
+  return m;
+}
+
+// ---------- معاملات العالم (من البذرة) ----------
+export let P = null;
+export const roadX = z => P.roadC + P.roadA * Math.sin(z * P.roadF + P.rp);
+
+function makeParams(seed) {
+  const r = mulberry32(seed * 7919 + 13);
+  const tod = ['morning', 'noon', 'noon', 'evening'][Math.floor(r() * 4)];
+  const env = {
+    morning: { top: 0x5b8fd0, hor: 0xf1dcc4, sun: 0xffd9a8, si: 2.0, el: [22, 38] },
+    noon: { top: 0x2f6fc8, hor: 0xcfe3f2, sun: 0xfff0d0, si: 2.4, el: [55, 75] },
+    evening: { top: 0x45589c, hor: 0xf4c8a2, sun: 0xffb877, si: 1.9, el: [12, 24] }
+  }[tod];
+  const dry = r(), biomes = dry > 0.62 ? ['steppe', 'steppe', 'orchard'] : ['meadow', 'pinewood', 'orchard', 'meadow'];
+  const el = (env.el[0] + r() * (env.el[1] - env.el[0])) * Math.PI / 180, az = r() * Math.PI * 2;
+  return {
+    seed, tod, env, dry, biome: biomes[Math.floor(r() * biomes.length)],
+    amp: 2.2 + r() * 2.0, f: 0.0055 + r() * 0.0035, amp2: 0.25 + r() * 0.3, ox: r() * 500, oz: r() * 500,
+    tx: (r() - 0.5) * 0.05, tz: (r() - 0.5) * 0.05, rim: 14 + r() * 22,
+    roadC: (r() < 0.5 ? -1 : 1) * (30 + r() * 40), roadA: 6 + r() * 10, roadF: 0.015 + r() * 0.02, rp: r() * 6.28,
+    sunDir: new V3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)),
+    clouds: 6 + Math.floor(r() * 14)
+  };
+}
+
+// NIVO-V8 — تضاريس + نهر + جسر
+function baseH(x, z) {
+  const rr = Math.hypot(x, z);
+  const far = smooth(90, 230, rr), rel = 0.5 + 0.5 * far;
+  const wx = x + 30 * (vnoise(x * 0.008 + P.ox, z * 0.008 + P.oz) - 0.5), wz = z + 30 * (vnoise(x * 0.008 + P.oz, z * 0.008 + P.ox) - 0.5);
+  const big = (fbm(wx * P.f + P.ox, wz * P.f + P.oz) - 0.47) * 2 * P.amp;
+  const rg = 1 - Math.abs(2 * vnoise(wx * 0.018 + P.ox * 2.1, wz * 0.018 + P.oz * 1.7) - 1);
+  const mid = (rg * rg - 0.3) * P.amp2 * 1.6 + (fbm(x * 0.03 + P.ox * 3, z * 0.03 + P.oz * 3) - 0.47) * 0.35;
+  let h = (big + mid) * rel + (P.tx * x + P.tz * z) * (0.35 + 0.65 * far);
+  const tz = smooth(0.58, 0.72, vnoise(x * 0.005 + P.ox * 1.9, z * 0.005 + P.oz * 1.1)) * far;
+  if (tz > 0) { const s = 1.0, k = h / s, f = k - Math.floor(k); h += ((Math.floor(k) + smooth(0.6, 1.0, f)) * s - h) * 0.6 * tz; }
+  const rim = smooth(170, 340, rr);
+  return h + rim * rim * P.rim * (0.6 + 0.8 * vnoise(x * 0.01 + 5, z * 0.01 + 9));
+}
+
+// ---------- النهر ----------
+let RV = null, BRG = null;
+const rvCl = s => RV.off + RV.A1 * Math.sin(RV.k1 * s + RV.p1) + RV.A2 * Math.sin(RV.k2 * s + RV.p2);
+const rvDcl = s => RV.A1 * RV.k1 * Math.cos(RV.k1 * s + RV.p1) + RV.A2 * RV.k2 * Math.cos(RV.k2 * s + RV.p2);
+const rvHW = s => RV.w0 + RV.w1 * (vnoise(s * 0.02 + P.ox * 0.5, P.oz) - 0.5) * 2;
+function wlAt(s) {
+  const f = (s + 350) / RV.ds, i = Math.max(0, Math.min(RV.wl.length - 2, Math.floor(f))), t = Math.max(0, Math.min(1, f - i));
+  return RV.wl[i] * (1 - t) + RV.wl[i + 1] * t;
+}
+export function riverInfo(x, z) {
+  if (!RV) return { d: 1e9, hw: 0, s: 0, wl: 0 };
+  const s = x * RV.dx + z * RV.dz, n = x * RV.nx + z * RV.nz, dc = rvDcl(s);
+  return { d: Math.abs(n - rvCl(s)) / Math.sqrt(1 + dc * dc), hw: rvHW(s), s, wl: wlAt(s) };
+}
+function makeRiver() {
+  const r = mulberry32(P.seed * 101 + 77), ang = r() * Math.PI;
+  RV = { dx: Math.cos(ang), dz: Math.sin(ang), nx: -Math.sin(ang), nz: Math.cos(ang), off: (r() - 0.5) * 110,
+    A1: 20 + r() * 20, k1: 0.012 + r() * 0.008, p1: r() * 6.28, A2: 5 + r() * 7, k2: 0.04 + r() * 0.02, p2: r() * 6.28,
+    w0: 3.2 + r() * 1.5, w1: 1.2, ds: 5, wl: [] };
+  // منسوب الماء: متوسط الأرض الأصلية على المجرى − 0.7 م مع انحدار أحادي الاتجاه (يجري نحو +s)
+  const n = 141, raw = [];
+  for (let i = 0; i < n; i++) { const s = -350 + i * RV.ds, c = rvCl(s); raw.push(baseH(s * RV.dx + c * RV.nx, s * RV.dz + c * RV.nz)); }
+  let prev = Infinity;
+  RV.wl = raw.map((_, i) => {
+    let a = 0, k = 0; for (let j = Math.max(0, i - 8); j <= Math.min(n - 1, i + 8); j++) { a += raw[j]; k++; }
+    prev = Math.min(prev - 0.0007 * RV.ds, a / k - 0.7); return prev;
+  });
+  makeBridge();
+}
+// تحفير المجرى: قاع، ضفاف منحدرة، ثم انتقال تدريجي إلى الأرض المحيطة
+function carve(h0, x, z) {
+  const ri = riverInfo(x, z), d = ri.d, hw = ri.hw, BW = 9, FADE = 14;
+  if (d > hw + BW + FADE) return h0;
+  const wl = ri.wl;
+  let target;
+  if (d < hw) { const q = d / hw; target = wl - 0.2 - 0.9 * (1 - q * q); }
+  else if (d < hw + BW) target = wl - 0.2 + 1.5 * smooth(0, 1, (d - hw) / BW);
+  else target = wl + 1.3 + (d - hw - BW) * 0.02;
+  const w = d < hw + BW ? 1 : 1 - smooth(hw + BW, hw + BW + FADE, d);
+  return h0 + (target - h0) * w;
+}
+function terrainH(x, z) { const h0 = baseH(x, z); return RV ? carve(h0, x, z) : h0; }
+
+// الجسر: حيث يقطع الطريق النهر
+function makeBridge() {
+  BRG = null;
+  let best = null;
+  for (let z = -230; z <= 230; z += 2) { const x = roadX(z), ri = riverInfo(x, z); if (!best || ri.d < best.d) best = { x, z, d: ri.d }; }
+  if (!best || best.d > 10) return;
+  const tx = roadX(best.z + 4) - roadX(best.z - 4), tz = 8, tl = Math.hypot(tx, tz), ux = tx / tl, uz = tz / tl;
+  const ri = riverInfo(best.x, best.z), dc = rvDcl(ri.s);
+  let rx = RV.dx + RV.nx * dc, rz = RV.dz + RV.nz * dc; const rl = Math.hypot(rx, rz); rx /= rl; rz /= rl;
+  const cosf = Math.max(0.35, Math.abs(ux * -rz + uz * rx)), hl = (ri.hw + 6) / cosf + 3;
+  const e1 = terrainH(best.x + ux * hl, best.z + uz * hl), e2 = terrainH(best.x - ux * hl, best.z - uz * hl);
+  BRG = { x: best.x, z: best.z, ux, uz, hl, hw: 2.1, y: Math.max(e1, e2, ri.wl + 1.1) + 0.12 };
+}
+const onDeck = (x, z) => {
+  if (!BRG) return false;
+  const dx = x - BRG.x, dz = z - BRG.z;
+  return Math.abs(dx * BRG.ux + dz * BRG.uz) <= BRG.hl && Math.abs(-dx * BRG.uz + dz * BRG.ux) <= BRG.hw;
+};
+// ارتفاع السطح الذي يقف عليه الجهاز/الميرا: الأرض أو سطح الجسر
+export function groundH(x, z) {
+  if (!P) return 0;
+  return onDeck(x, z) ? BRG.y : terrainH(x, z);
+}
+export const bridgeInfo = () => BRG;
+export function isWater(x, z) { if (!RV) return false; const ri = riverInfo(x, z); return ri.d < ri.hw + 1.8 && !onDeck(x, z); }
+const inRiver = (x, z, m = 0) => { if (!RV) return false; const ri = riverInfo(x, z); return ri.d < ri.hw + 1.8 + m; };
+export function wetness(x, z) { if (!RV || onDeck(x, z)) return 0; const ri = riverInfo(x, z); return clamp(1 - (ri.d - ri.hw) / 16, 0, 1); }
+const localDry = (x, z) => {
+  if (!RV) return P.dry;
+  const ri = riverInfo(x, z);
+  return clamp(P.dry + (ri.d - 50) / 260 - 0.25 * clamp(1 - (ri.d - ri.hw) / 16, 0, 1), 0, 1);
+};
+export function inHouse(x, z) { return HOUSES.some(h => Math.hypot(x - h.x, z - h.z) < h.rad * 0.7); }
+export function houseList() { return HOUSES.map(h => ({ x: h.x, z: h.z, w: h.rad })); }
+export function riverPath() {
+  if (!RV) return [];
+  const o = [];
+  for (let s = -340; s <= 340; s += 6) { const c = rvCl(s); o.push({ x: s * RV.dx + c * RV.nx, z: s * RV.dz + c * RV.nz, hw: rvHW(s) + 1.8, s }); }
+  return o;
+}
+// أقرب موضع جاف (بعيد 6 م عن الماء وخارج المباني)
+export function dryNear(x, z) {
+  for (let rad = 0; rad < 140; rad += 3) for (let a = 0; a < 6.283; a += 0.7) {
+    const px = Math.round(x + Math.cos(a) * rad), pz = Math.round(z + Math.sin(a) * rad), ri = riverInfo(px, pz);
+    if (!isWater(px, pz) && !inHouse(px, pz) && ri.d > ri.hw + 6) return { x: px, z: pz };
+  }
+  return { x: Math.round(x), z: Math.round(z) };
+}
+
+// سطح الماء: شريط يتبع المجرى بشيدر (تموّج + وهج + خطوط جريان)
+let waterMat = null;
+(function tickWater(t) { if (waterMat) waterMat.uniforms.uTime.value = t / 1000; requestAnimationFrame(tickWater); })(0);
+function buildRiver() {
+  if (!RV) return;
+  const step = 4, S0 = -340, n = Math.floor(680 / step) + 1, pos = [], uv = [], idx = [];
+  let acc = 0, px = null, pz = null;
+  for (let i = 0; i < n; i++) {
+    const s = S0 + i * step, c = rvCl(s), dc = rvDcl(s), cx = s * RV.dx + c * RV.nx, cz = s * RV.dz + c * RV.nz;
+    let tx = RV.dx + RV.nx * dc, tz = RV.dz + RV.nz * dc; const tl = Math.hypot(tx, tz); tx /= tl; tz /= tl;
+    const hw = rvHW(s) + 2.0, y = wlAt(s) - 0.05;
+    if (px !== null) acc += Math.hypot(cx - px, cz - pz);
+    px = cx; pz = cz;
+    pos.push(cx + tz * hw, y, cz - tx * hw, cx - tz * hw, y, cz + tx * hw);
+    uv.push(acc / 6, 0, acc / 6, 1);
+    if (i > 0) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  waterMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: { uTime: { value: 0 }, uSun: { value: P.sunDir.clone() }, uDeep: { value: new THREE.Color(0x174562) }, uShal: { value: new THREE.Color(0x3f8a8e) }, uHor: { value: HOR.clone() } },
+    vertexShader: `varying vec2 vUv; varying vec3 vW; varying float vD;
+void main(){ vUv = uv; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vD = distance(cameraPosition, vW); gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `uniform float uTime; uniform vec3 uSun; uniform vec3 uDeep; uniform vec3 uShal; uniform vec3 uHor; varying vec2 vUv; varying vec3 vW; varying float vD;
+void main(){
+  float edge = 1.0 - abs(vUv.y * 2.0 - 1.0);
+  vec3 base = mix(uShal, uDeep, smoothstep(0.0, 0.7, edge));
+  float t = uTime;
+  vec2 q = vec2(vUv.x * 14.0 - t * 1.1, vUv.y * 6.0);
+  vec3 n = normalize(vec3(sin(q.x * 1.7 + q.y * 2.1) * 0.12 + sin(vW.x * 0.9 + t) * 0.04, 1.0, cos(q.x * 1.3 - q.y * 1.7) * 0.12 + cos(vW.z * 0.8 - t * 0.9) * 0.04));
+  vec3 V = normalize(cameraPosition - vW);
+  float fres = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+  vec3 sky = mix(uHor, vec3(0.45, 0.65, 0.95), 0.5);
+  vec3 col = mix(base, sky, clamp(fres * 0.9 + 0.12, 0.0, 1.0));
+  float glint = pow(max(dot(reflect(-uSun, n), V), 0.0), 90.0) * 2.0;
+  float streak = smoothstep(0.82, 1.0, sin(q.x * 3.0 + sin(q.y * 4.0) * 1.3)) * 0.12;
+  col += vec3(1.0, 0.95, 0.85) * (glint + streak);
+  col = mix(col, uHor, smoothstep(110.0, 560.0, vD));
+  gl_FragColor = vec4(col, 0.82 + 0.1 * (1.0 - edge));
+  #include <colorspace_fragment>
+}`
+  });
+  const m = new THREE.Mesh(geo, waterMat); m.frustumCulled = false; m.renderOrder = 2; W.add(m);
+  if (BRG) {
+    const g = new THREE.Group(), wood = new THREE.MeshLambertMaterial({ color: 0x8a6a45 }), stone = new THREE.MeshLambertMaterial({ color: 0x9a9a98 }), L2 = BRG.hl * 2;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(BRG.hw * 2, 0.36, L2), stone); deck.position.y = -0.18; g.add(deck);
+    [-1, 1].forEach(sx => {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, L2), wood); rail.position.set(sx * (BRG.hw - 0.1), 0.95, 0); g.add(rail);
+      const curb = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.4, L2), stone); curb.position.set(sx * (BRG.hw - 0.12), 0.2, 0); g.add(curb);
+      for (let z = -BRG.hl + 1; z <= BRG.hl - 0.5; z += 3) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.9, 0.12), wood); post.position.set(sx * (BRG.hw - 0.1), 0.5, z); g.add(post); }
+      const ab = new THREE.Mesh(new THREE.BoxGeometry(BRG.hw * 2, 2.6, 0.8), stone); ab.position.set(0, -1.5, sx * (BRG.hl - 0.5)); g.add(ab);
+    });
+    g.position.set(BRG.x, BRG.y, BRG.z); g.rotation.y = Math.atan2(BRG.ux, BRG.uz); W.add(g);
+  }
+}
+
+// ---------- بناء العالم ----------
+let W = null, mapCache = null;
+function disposeGroup(g) {
+  g.traverse(o => {
+    if (o.isInstancedMesh) o.dispose();
+    if (o.geometry) o.geometry.dispose();
+    const m = o.material;
+    if (m) (Array.isArray(m) ? m : [m]).forEach(mm => { if (mm.map) mm.map.dispose(); mm.dispose(); });
+  });
+  scene.remove(g);
+}
+
+export function regen(seed) {
+  if (W) disposeGroup(W);
+  W = new THREE.Group(); scene.add(W);
+  P = makeParams(seed); mapCache = null; makeRiver();
+  HOR.set(P.env.hor); scene.background.copy(HOR); scene.fog.color.copy(HOR);
+  sun.color.set(P.env.sun); sun.intensity = P.env.si; sun.position.copy(P.sunDir).multiplyScalar(120);
+  hemi.intensity = 1.2 + 0.3 * P.sunDir.y;
+  buildSky(); buildMountains(); buildTerrain(); buildRiver(); buildVeg(); buildHouses();
+  return P;
+}
+
+function buildSky() {
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(600, 32, 16), new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false,
+    uniforms: { top: { value: new THREE.Color(P.env.top) }, hor: { value: new THREE.Color(P.env.hor) }, sunDir: { value: P.sunDir.clone() } },
+    vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `uniform vec3 top; uniform vec3 hor; uniform vec3 sunDir; varying vec3 vP;
+void main(){
+  vec3 n = normalize(vP); float h = clamp(n.y, 0.0, 1.0);
+  vec3 c = mix(hor, top, pow(h, 0.5));
+  float s = max(dot(n, sunDir), 0.0);
+  c += vec3(1.0, 0.92, 0.75) * (pow(s, 800.0) * 3.0 + pow(s, 14.0) * 0.18);
+  gl_FragColor = vec4(c, 1.0);
+  #include <colorspace_fragment>
+}`
+  }));
+  sky.renderOrder = -10; sky.frustumCulled = false; W.add(sky);
+
+  const r = mulberry32(P.seed * 3 + 1), cv = document.createElement('canvas'); cv.width = 128; cv.height = 64;
+  const c = cv.getContext('2d');
+  for (let i = 0; i < 7; i++) {
+    const x = 24 + i * 13 + r() * 6, y = 34 + r() * 8, rad = 14 + r() * 12;
+    const g = c.createRadialGradient(x, y, 0, x, y, rad); g.addColorStop(0, 'rgba(255,255,255,.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, rad, 0, 7); c.fill();
+  }
+  const ct = new THREE.CanvasTexture(cv); ct.colorSpace = THREE.SRGBColorSpace;
+  for (let i = 0; i < P.clouds; i++) {
+    const a = r() * 6.283, d = 260 + r() * 120;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ct, transparent: true, opacity: 0.85, depthWrite: false, fog: false }));
+    s.position.set(Math.cos(a) * d, 90 + r() * 80, Math.sin(a) * d); s.scale.set(110 + r() * 80, 48 + r() * 25, 1);
+    W.add(s);
+  }
+}
+
+function buildMountains() {
+  [[470, 0.55, 0x5f7894, 1.0], [400, 0.4, 0x4f6a85, 0.8]].forEach(([R, mix, col, hs], k) => {
+    const geo = new THREE.CylinderGeometry(R, R, 1, 120, 1, true), pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      if (pos.getY(i) > 0) { const a = Math.atan2(pos.getZ(i), pos.getX(i)); pos.setY(i, (18 + 85 * Math.pow(fbm(Math.cos(a) * 2.4 + P.ox + k * 7, Math.sin(a) * 2.4 + P.oz + k * 3), 1.7)) * hs); }
+      else pos.setY(i, -10);
+    }
+    geo.computeVertexNormals();
+    const c = new THREE.Color(P.env.hor).lerp(new THREE.Color(col), mix);
+    W.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide, fog: false })));
+  });
+  const fl = new THREE.Mesh(new THREE.CircleGeometry(900, 48), new THREE.MeshLambertMaterial({ color: 0x3e5a2f }));
+  fl.rotation.x = -Math.PI / 2; fl.position.y = -6; W.add(fl);
+}
+
+function buildTerrain() {
+  const r0 = mulberry32(P.seed * 5 + 9), cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const c = cv.getContext('2d'); c.fillStyle = '#e0e0e0'; c.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 3000; i++) { const v = 150 + Math.floor(r0() * 90); c.fillStyle = `rgb(${v},${v},${v})`; c.fillRect(r0() * 256, r0() * 256, 1 + r0() * 2, 2 + r0() * 4); }
+  const tex = new THREE.CanvasTexture(cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(110, 110); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+
+  const N = 270, S = 700, cell = S / N, n1 = N + 1, geo = new THREE.PlaneGeometry(S, S, N, N);
+  geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position, hs = new Float32Array(p.count), col = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) { hs[i] = terrainH(p.getX(i), p.getZ(i)); p.setY(i, hs[i]); }
+  const gr = [0.2, 0.43, 0.14], dr = [0.56, 0.48, 0.27], dry = P.dry;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), h = hs[i], rr = Math.hypot(x, z), ix = i % n1, iy = (i / n1) | 0;
+    const slope = Math.hypot(hs[ix < N ? i + 1 : i - 1] - h, hs[iy < N ? i + n1 : i - n1] - h) / cell;
+    const n = fbm(x * 0.08 + P.ox, z * 0.08 + P.oz), m = vnoise(x * 0.4, z * 0.4);
+    const ld = localDry(x, z); let cr = gr[0] + (dr[0] - gr[0]) * ld + 0.1 * n, cg = gr[1] + (dr[1] - gr[1]) * ld + 0.18 * n + 0.04 * m, cb = gr[2] + (dr[2] - gr[2]) * ld + 0.05 * n;
+    const fk = smooth(0.62, 0.68, vnoise(x * 0.017 + P.ox * 3, z * 0.017 + P.oz * 3)) * (1 - smooth(150, 230, rr));
+    if (fk > 0) {
+      const wheat = vnoise(x * 0.005 + 7, z * 0.005 + 3) > 0.5, fr = wheat ? 0.72 : 0.36, fg = wheat ? 0.62 : 0.27, fb = wheat ? 0.28 : 0.17;
+      cr += (fr - cr) * fk; cg += (fg - cg) * fk; cb += (fb - cb) * fk;
+    }
+    const rk = clamp((slope - 0.12) * 4, 0, 1);
+    cr += (0.42 - cr) * rk; cg += (0.4 - cg) * rk; cb += (0.36 - cb) * rk;
+    const ri_ = riverInfo(x, z), rd = ri_.d < ri_.hw + 2.5 ? 0 : 1 - smooth(1.8, 3.4, Math.abs(x - roadX(z)));
+    cr += (0.55 - cr) * rd; cg += (0.45 - cg) * rd; cb += (0.3 - cb) * rd;
+    { const mud = ri_.d < ri_.hw + 1.8 ? 1 : 1 - smooth(ri_.hw + 1.8, ri_.hw + 7, ri_.d); if (mud > 0) { cr += (0.3 - cr) * mud * 0.85; cg += (0.27 - cg) * mud * 0.85; cb += (0.19 - cb) * mud * 0.85; } }
+    col[i * 3] = cr; col[i * 3 + 1] = cg; col[i * 3 + 2] = cb;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  W.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, map: tex })));
+}
+
+// نباتات ومنازل موزَّعة على كل الخريطة + إخلاء خطوط النظر ديناميكياً
+let VEG = [], HOUSES = [];
+const ZERO_M = new THREE.Matrix4().makeScale(0, 0, 0);
+
+export let vegK = 0.5;
+export function setVegDensity(k) { vegK = k; }
+
+function buildVeg() {
+  VEG = [];
+  const K = vegK, r = mulberry32(P.seed * 31 + 7), dummy = new THREE.Object3D(), c = new THREE.Color();
+  const lam = () => new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const plain = (geo, mat, n) => { const m = new THREE.InstancedMesh(geo, mat, n); m.count = 0; m.frustumCulled = false; W.add(m); return m; };
+  const reg = (geo, mat, n) => { const o = { mesh: plain(geo, mat, n), n: 0, max: n, xz: [], base: new Float32Array(n * 16), hid: new Uint8Array(n) }; VEG.push(o); return o; };
+  const put = (o, x, z, rad) => {
+    if (o.n >= o.max) return -1;
+    dummy.updateMatrix(); dummy.matrix.toArray(o.base, o.n * 16); o.mesh.setMatrixAt(o.n, dummy.matrix); o.xz.push(x, z, rad);
+    return o.n++;
+  };
+  const fin = o => { o.mesh.count = o.n; o.mesh.instanceMatrix.needsUpdate = true; if (o.mesh.instanceColor) o.mesh.instanceColor.needsUpdate = true; };
+  const rnd2 = () => (r() - 0.5) * 540;
+
+  // ---- أشجار: بقع غابات + أشجار منفردة + بساتين (لا شيء قرب المركز) ----
+  const trunkG = new THREE.CylinderGeometry(0.12, 0.2, 1, 6); trunkG.translate(0, 0.5, 0);
+  const pineG = new THREE.ConeGeometry(1.2, 4.4, 7); pineG.translate(0, 2.2, 0);
+  const roundG = new THREE.IcosahedronGeometry(1.5, 1), MAXT = 700;
+  const T0 = reg(trunkG, new THREE.MeshLambertMaterial({ color: 0x6b4a2b }), MAXT), T1 = reg(pineG, lam(), MAXT), T2 = reg(roundG, lam(), MAXT);
+  const addTree = (x, z, kind, sc) => {
+    if (T0.n >= MAXT || inRiver(x, z, 1.5)) return;
+    const gy = groundH(x, z), pine = kind === 'pine', ol = kind === 'olive';
+    dummy.rotation.set(0, r() * 6.28, 0);
+    dummy.position.set(x, gy - 0.1, z); dummy.scale.set(sc, (pine ? 1.4 : 2.2) * sc, sc); put(T0, x, z, (pine ? 1.2 : 1.5) * sc);
+    if (pine) {
+      dummy.position.set(x, gy + 0.9 * sc, z); dummy.scale.set(sc, sc, sc);
+      const k = put(T1, x, z, 1.2 * sc); if (k >= 0) { c.setHSL(0.33 + r() * 0.04, 0.45, 0.15 + r() * 0.08); T1.mesh.setColorAt(k, c); }
+    } else {
+      dummy.position.set(x, gy + (ol ? 1.9 : 2.9) * sc, z); dummy.scale.set(sc * (ol ? 0.9 : 1), sc * (ol ? 0.7 : 0.9), sc * (ol ? 0.9 : 1));
+      const k = put(T2, x, z, 1.5 * sc);
+      if (k >= 0) { if (ol) c.setHSL(0.22, 0.25, 0.38 + r() * 0.08); else c.setHSL(0.24 + r() * 0.08 - P.dry * 0.06, 0.5 - P.dry * 0.15, 0.26 + r() * 0.1); T2.mesh.setColorAt(k, c); }
+    }
+  };
+  const tLim = Math.round(300 * K), thr = { pinewood: 0.5, meadow: 0.58, steppe: 0.66, orchard: 0.6 }[P.biome];
+  for (let i = 0; i < 30000 && T0.n < tLim; i++) {
+    const x = rnd2(), z = rnd2();
+    if (Math.hypot(x, z) < 55 || Math.abs(x - roadX(z)) < 6 || inRiver(x, z, 2)) continue;
+    const f = fbm(x * 0.011 + P.ox * 1.3, z * 0.011 + P.oz * 1.3) + wetness(x, z) * 0.3;
+    if (f < thr || r() > Math.min(1, 0.15 + (f - thr) / 0.1)) continue;
+    const pine = P.biome === 'pinewood' ? r() < 0.8 : fbm(x * 0.02 + 3, z * 0.02) > 0.5 && P.dry < 0.6;
+    addTree(x, z, pine ? 'pine' : 'round', 0.75 + r() * 0.7);
+  }
+  for (let i = 0, n = 0, lone = Math.round(25 * K); i < 4000 && n < lone; i++) {
+    const x = rnd2(), z = rnd2();
+    if (Math.hypot(x, z) < 40 || Math.abs(x - roadX(z)) < 6) continue;
+    addTree(x, z, r() < 0.5 ? 'round' : 'pine', 0.9 + r() * 0.6); n++;
+  }
+  if (K >= 0.4) {
+    const nOrch = P.biome === 'orchard' ? 2 : 1;
+    for (let k = 0; k < nOrch; k++) {
+      const a = r() * 6.28, d = 70 + r() * 170, cx = Math.cos(a) * d, cz = Math.sin(a) * d, rot = r() * 3.14, cs = Math.cos(rot), sn = Math.sin(rot);
+      for (let i = 0; i < 5; i++) for (let j = 0; j < 7; j++) { const px = (i - 2) * 7, pz = (j - 3) * 7; addTree(cx + px * cs - pz * sn, cz + px * sn + pz * cs, 'olive', 0.9 + r() * 0.2); }
+    }
+  }
+  fin(T0); fin(T1); fin(T2);
+
+  // ---- شجيرات وصخور (تُخلى حول النقاط) ----
+  const bu = reg(new THREE.IcosahedronGeometry(0.5, 1), lam(), 400), bLim = Math.round(220 * K);
+  for (let i = 0; i < 6000 && bu.n < bLim; i++) {
+    const x = rnd2(), z = rnd2();
+    if (Math.abs(x - roadX(z)) < 3.5 || inRiver(x, z, 0.5)) continue;
+    if (fbm(x * 0.02 + P.ox, z * 0.02 + P.oz) + wetness(x, z) * 0.3 < 0.42 && r() > 0.2) continue;
+    const sc = 0.5 + r() * 0.8;
+    dummy.position.set(x, groundH(x, z) + 0.25 * sc, z); dummy.rotation.set(0, r() * 6, 0); dummy.scale.set(sc * 1.2, sc * 0.8, sc * 1.2);
+    const k = put(bu, x, z, 0.6 * sc); if (k >= 0) { c.setHSL(0.26 - P.dry * 0.08 + r() * 0.05, 0.45 - P.dry * 0.15, 0.2 + r() * 0.1); bu.mesh.setColorAt(k, c); }
+  }
+  fin(bu);
+  const rk = reg(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x8a8d90 }), 300), rLim = Math.round(60 + 90 * Math.min(K, 1.2));
+  for (let i = 0; i < 4000 && rk.n < rLim; i++) {
+    const x = rnd2(), z = rnd2(), gy = groundH(x, z), sl = Math.abs(groundH(x + 2, z) - gy) / 2;
+    if (r() > 0.2 + sl * 9 || inRiver(x, z, 0.5)) continue;
+    const sc = 0.15 + r() * r() * 0.9;
+    dummy.position.set(x, gy + sc * 0.2, z); dummy.rotation.set(r() * 3, r() * 3, r() * 3); dummy.scale.set(sc, sc * 0.6, sc * 0.9); put(rk, x, z, 0.8 * sc);
+  }
+  fin(rk);
+  // قصب وأعشاب مائلة على ضفاف النهر
+  if (RV) {
+    const re = reg(new THREE.ConeGeometry(0.05, 1.5, 4), lam(), 700); re.mesh.geometry.translate(0, 0.75, 0);
+    for (let i = 0; i < 20000 && re.n < Math.round(600 * Math.min(1, K + 0.3)); i++) {
+      const s = (r() - 0.5) * 680, cl = rvCl(s), side = r() < 0.5 ? -1 : 1, off = rvHW(s) + 1.8 + (r() - 0.35) * 3.5;
+      const dc = rvDcl(s), tl = Math.hypot(RV.dx + RV.nx * dc, RV.dz + RV.nz * dc), tx = (RV.dx + RV.nx * dc) / tl, tz = (RV.dz + RV.nz * dc) / tl;
+      const x = s * RV.dx + cl * RV.nx - tz * side * off, z = s * RV.dz + cl * RV.nz + tx * side * off;
+      if (Math.abs(x) > 270 || Math.abs(z) > 270) continue;
+      const ri = riverInfo(x, z); if (ri.d < ri.hw + 1.0) continue;
+      for (let q = 0; q < 3; q++) {
+        const px = x + (r() - 0.5) * 0.8, pz = z + (r() - 0.5) * 0.8, sc = 0.6 + r() * 0.9;
+        dummy.position.set(px, groundH(px, pz), pz); dummy.rotation.set((r() - 0.5) * 0.25, r() * 6, (r() - 0.5) * 0.25); dummy.scale.set(sc, sc, sc);
+        const kk = put(re, px, pz, 0.3); if (kk >= 0) { c.setHSL(0.17 + r() * 0.06, 0.45, 0.3 + r() * 0.12); re.mesh.setColorAt(kk, c); }
+      }
+    }
+    fin(re);
+  }
+
+  // ---- أعشاب وأزهار (لا تحجب الرؤية) ----
+  const tuftG = new THREE.ConeGeometry(0.07, 0.4, 4); tuftG.translate(0, 0.2, 0);
+  const tf = plain(tuftG, lam(), 9000), nT = Math.round(5000 + 2500 * K); let nf = 0;
+  for (let i = 0; i < 30000 && nf < nT; i++) {
+    const x = rnd2(), z = rnd2();
+    if (Math.abs(x - roadX(z)) < 2.5 || inRiver(x, z, 0.3)) continue;
+    const sc = 0.6 + r() * 1.2;
+    dummy.position.set(x, groundH(x, z), z); dummy.rotation.set(0, r() * 6, 0); dummy.scale.set(sc, sc, sc); dummy.updateMatrix();
+    tf.setMatrixAt(nf, dummy.matrix); { const ld = localDry(x, z); c.setHSL(0.22 - ld * 0.06 + r() * 0.08, 0.5 - ld * 0.2, 0.25 + r() * 0.15); } tf.setColorAt(nf++, c);
+  }
+  tf.count = nf; tf.instanceMatrix.needsUpdate = true; if (tf.instanceColor) tf.instanceColor.needsUpdate = true;
+  if (P.dry < 0.7 && K > 0) {
+    const fl = plain(new THREE.SphereGeometry(0.06, 5, 4), lam(), 1500), nFl = Math.round(700 * K); let nl = 0;
+    const pal = [0xffffff, 0xffd84a, 0xc58bff, 0xff7a7a];
+    for (let i = 0; i < 6000 && nl < nFl; i++) {
+      const x = rnd2(), z = rnd2();
+      if (Math.abs(x - roadX(z)) < 2.5 || inRiver(x, z, 0.3) || fbm(x * 0.03 + P.ox * 2, z * 0.03 + P.oz * 2) < 0.5) continue;
+      dummy.position.set(x, groundH(x, z) + 0.22, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+      fl.setMatrixAt(nl, dummy.matrix); c.setHex(pal[Math.floor(r() * 4)]); fl.setColorAt(nl++, c);
+    }
+    fl.count = nl; fl.instanceMatrix.needsUpdate = true; if (fl.instanceColor) fl.instanceColor.needsUpdate = true;
+  }
+
+  // ---- أعمدة كهرباء بمحاذاة الطريق ----
+  const wood = new THREE.MeshLambertMaterial({ color: 0x5a4632 });
+  const pg = plain(new THREE.CylinderGeometry(0.09, 0.11, 8, 6), wood, 24), ca = plain(new THREE.BoxGeometry(2.2, 0.12, 0.12), wood, 24); let np = 0;
+  for (let z = -260; z <= 260 && np < 24; z += 45) {
+    const x = roadX(z) + 4.5;
+    dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.position.set(x, groundH(x, z) + 4, z); dummy.updateMatrix(); pg.setMatrixAt(np, dummy.matrix);
+    dummy.position.y += 3.6; dummy.updateMatrix(); ca.setMatrixAt(np++, dummy.matrix);
+  }
+  pg.count = ca.count = np; pg.instanceMatrix.needsUpdate = true; ca.instanceMatrix.needsUpdate = true;
+}
+
+function buildHouses() {
+  HOUSES = [];
+  const r = mulberry32(P.seed * 17 + 3), nv = 1 + Math.floor(r() * 2);
+  const house = (x, z) => { if (inRiver(x, z, 14)) return;
+    const w = 6 + r() * 5, h = 3.5 + r() * 2, g = new THREE.Group();
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.8), new THREE.MeshLambertMaterial({ color: [0xd9c9a8, 0xe8e0d0, 0xcfc0a0, 0xe0d2b8][Math.floor(r() * 4)] })); wall.position.y = h / 2; g.add(wall);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(w * 0.78, h * 0.5, 4), new THREE.MeshLambertMaterial({ color: r() < 0.5 ? 0x9a4a32 : 0x6e5a4a })); roof.rotation.y = Math.PI / 4; roof.position.y = h + h * 0.25; roof.scale.z = 0.8; g.add(roof);
+    g.position.set(x, groundH(x, z), z); g.rotation.y = r() * 3; W.add(g); HOUSES.push({ g, x, z, rad: w });
+  };
+  for (let v = 0; v < nv; v++) {
+    const a = r() * 6.283, d = 90 + r() * 170, vx = Math.cos(a) * d, vz = Math.sin(a) * d, n = 3 + Math.floor(r() * 3);
+    for (let i = 0; i < n; i++) { const x = vx + (r() - 0.5) * 50, z = vz + (r() - 0.5) * 50; if (Math.abs(x - roadX(z)) > 10) house(x, z); }
+  }
+  for (let i = 0; i < 2; i++) { const a = r() * 6.283, d = 80 + r() * 180, x = Math.cos(a) * d, z = Math.sin(a) * d; if (Math.abs(x - roadX(z)) > 10) house(x, z); }
+}
+
+// إخفاء ما يحجب خطوط النظر بين مواضع الجهاز والنقاط، وما حول النقاط نفسها
+export function clearVeg(points, setups) {
+  const pts = points.concat(setups), segs = [], Z0 = new THREE.Matrix4().makeScale(0, 0, 0);
+  points.forEach(p => setups.forEach(s => segs.push([s.x, s.z, p.x, p.z])));
+  const sd = (x, z, s) => {
+    const dx = s[2] - s[0], dz = s[3] - s[1], t = Math.max(0, Math.min(1, ((x - s[0]) * dx + (z - s[1]) * dz) / (dx * dx + dz * dz || 1)));
+    return Math.hypot(x - s[0] - t * dx, z - s[1] - t * dz);
+  };
+  const blocked = (x, z, rad) => pts.some(q => Math.hypot(x - q.x, z - q.z) < rad + 3.5) || segs.some(s => sd(x, z, s) < rad + 2.2);
+  const m = new THREE.Matrix4();
+  VEG.forEach(o => {
+    let dirty = false;
+    for (let i = 0; i < o.n; i++) {
+      const hide = blocked(o.xz[i * 3], o.xz[i * 3 + 1], o.xz[i * 3 + 2]);
+      if (hide !== !!o.hid[i]) { o.hid[i] = hide ? 1 : 0; o.mesh.setMatrixAt(i, hide ? Z0 : m.fromArray(o.base, i * 16)); dirty = true; }
+    }
+    if (dirty) o.mesh.instanceMatrix.needsUpdate = true;
+  });
+  HOUSES.forEach(h => { h.g.visible = true; });
+}
+
+// ---------- صورة الخريطة (كنتورية) ----------
+export function mapImage(half = 120, res = 240) {
+  if (mapCache && mapCache.seed === P.seed && mapCache.half === half && mapCache.res === res) return mapCache;
+  const n = res + 2, step = 2 * half / res, hs = new Float32Array(n * n);
+  let mn = 1e9, mx = -1e9;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const h = groundH(-half + (i - 0.5) * step, -half + (j - 0.5) * step); hs[j * n + i] = h; if (h < mn) mn = h; if (h > mx) mx = h; }
+  const range = Math.max(0.5, mx - mn), iv = range > 14 ? 2 : range > 7 ? 1 : range > 3.5 ? 0.5 : 0.25;
+  const cv = document.createElement('canvas'); cv.width = cv.height = res;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(res, res);
+  for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
+    const k = (j + 1) * n + (i + 1), h = hs[k], t = (h - mn) / range;
+    const dx = (hs[k + 1] - hs[k - 1]) / (2 * step), dz = (hs[k + n] - hs[k - n]) / (2 * step);
+    const sh = clamp((0.5 * dx + 0.7 + 0.5 * dz) / Math.sqrt(dx * dx + 1 + dz * dz) / 0.99 * 1.2, 0.45, 1.15);
+    let r, g, b;
+    if (t < 0.5) { const u = t / 0.5; r = 0.38 + 0.47 * u; g = 0.64 + 0.18 * u; b = 0.38 + 0.1 * u; }
+    else { const u = (t - 0.5) / 0.5; r = 0.85 - 0.2 * u; g = 0.82 - 0.35 * u; b = 0.48 - 0.15 * u; }
+    r *= sh; g *= sh; b *= sh;
+    const x = -half + (i + 0.5) * step, z = -half + (j + 0.5) * step;
+    if (Math.floor(h / iv) !== Math.floor(hs[k + 1] / iv) || Math.floor(h / iv) !== Math.floor(hs[k + n] / iv)) { r *= 0.55; g *= 0.55; b *= 0.55; }
+    if (Math.abs(x - roadX(z)) < 1.6) { r = 0.78; g = 0.66; b = 0.5; }
+    { const ri = riverInfo(x, z); if (ri.d < ri.hw + 1.8) { r = 0.16; g = 0.42; b = 0.72; } else if (ri.d < ri.hw + 5) { r *= 0.8; g *= 0.88; } if (onDeck(x, z)) { r = 0.6; g = 0.5; b = 0.38; } }
+    const o = (j * res + i) * 4; img.data[o] = r * 255; img.data[o + 1] = g * 255; img.data[o + 2] = b * 255; img.data[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  mapCache = { canvas: cv, mn, mx, iv, half, res, seed: P.seed };
+  return mapCache;
+}
+
+// ---------- تدريج الميرا ----------
+function staffTexture(pattern, label) {
+  const Wd = 144, H = 4000, PW = 76, cv = document.createElement('canvas'); cv.width = Wd; cv.height = H;
+  const c = cv.getContext('2d'), Y = h => H - h * 1000;
+  c.fillStyle = '#f6f3e6'; c.fillRect(0, 0, Wd, H);
+  c.fillStyle = '#161616';
+  for (let i = 0; i < 400; i += 2) c.fillRect(0, Y((i + 1) / 100), PW, 10);
+  if (pattern === 'E') for (let k = 0; k < 80; k++) c.fillRect(k % 2 === 0 ? 0 : PW - 16, Y((5 * k + 5) / 100), 16, 50);
+  else { c.fillStyle = '#c11'; for (let k = 0; k < 80; k++) c.fillRect(0, Y((5 * k + 5) / 100) - 1, PW, 3); }
+  c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+  const cx = PW + (Wd - PW) / 2;
+  for (let n = 0; n < 40; n++) {
+    const m = Math.floor(n / 10), d = n % 10, y0 = Y(n / 10);
+    c.fillStyle = m % 2 === 1 ? '#d11' : '#111';
+    if (label === 'dots') {
+      c.font = 'bold 56px sans-serif'; c.fillText(String(d), cx, y0 - 12);
+      for (let j = 0; j < m; j++) { c.beginPath(); c.arc(cx + (j - (m - 1) / 2) * 14, y0 - 80, 5, 0, 7); c.fill(); }
+    } else if (n > 0 && label === 'pair') { c.font = 'bold 46px sans-serif'; c.fillText(`${m}${d}`, cx, y0 - 30); }
+    else if (n > 0 && label === 'stack') { c.font = 'bold 40px sans-serif'; c.fillText(String(m), cx, y0 - 52); c.fillText(String(d), cx, y0 - 10); }
+    else if (n > 0 && label === 'dec') { c.font = 'bold 38px sans-serif'; c.fillText(`${m},${d}`, cx, y0 - 30); }
+    c.fillStyle = '#666'; c.fillRect(PW, y0 - 1, Wd - PW, 2);
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+
+// ---------- علامات نقاط المهمة ----------
+const markGroup = new THREE.Group(); scene.add(markGroup);
+function makeLabel(txt, color) {
+  const cv = document.createElement('canvas'); cv.width = 192; cv.height = 96;
+  const c = cv.getContext('2d');
+  c.fillStyle = color; c.beginPath(); c.roundRect ? c.roundRect(8, 8, 176, 80, 28) : c.rect(8, 8, 176, 80); c.fill();
+  c.fillStyle = '#fff'; c.font = 'bold 54px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, 96, 52);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthWrite: false })); s.scale.set(2.6, 1.3, 1);
+  return s;
+}
+export function setMarkers(points, setups) {
+  while (markGroup.children.length) {
+    const o = markGroup.children.pop();
+    if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    if (o.geometry) o.geometry.dispose();
+  }
+  points.forEach(p => {
+    const gy = groundH(p.x, p.z);
+    const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.25, 8), new THREE.MeshLambertMaterial({ color: p.bm ? 0x2ea043 : 0xdd2222 }));
+    peg.position.set(p.x, gy + 0.06, p.z); markGroup.add(peg);
+    const sp = makeLabel(p.id, p.bm ? '#2ea043' : '#e8402a'); sp.position.set(p.x, gy + 5.4, p.z); markGroup.add(sp);
+  });
+  setups.forEach(s => {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.1, 24), new THREE.MeshBasicMaterial({ color: 0x4dabf7, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(s.x, groundH(s.x, s.z) + 0.05, s.z); markGroup.add(ring);
+  });
+  clearVeg(points, setups);
+}
+
+// ---------- الميرا + الشخص ----------
+export const instPos = { x: 0, z: 0 };
+export const holder = { group: new THREE.Group(), face: null, station: null, target: null, walking: false, legs: [], phase: 0 };
+scene.add(holder.group);
+
+export function setStaffStyle(pattern, label) {
+  const m = holder.face.material;
+  if (m.map) m.map.dispose();
+  m.map = staffTexture(pattern, label); m.needsUpdate = true;
+}
+
+(function build() {
+  const g = holder.group, L = c => new THREE.MeshLambertMaterial({ color: c });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.152, 4, 0.022), L(0xb9bec6)); body.position.y = 2; g.add(body);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.144, 4), new THREE.MeshBasicMaterial({ map: staffTexture('E', 'dots') }));
+  face.position.set(0, 2, 0.0115); g.add(face); holder.face = face;
+  const Pn = new THREE.Group(); Pn.position.set(0, 0, -0.42); g.add(Pn);
+  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); Pn.add(m); return m; };
+  for (const s of [-1, 1]) {
+    const lg = new THREE.Group(); lg.position.set(s * 0.1, 0.92, 0); Pn.add(lg);
+    const th = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.06, 0.9, 10), L(0x2f4a7a)); th.position.y = -0.45; lg.add(th);
+    const bt = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.08, 0.26), L(0x222222)); bt.position.set(0, -0.9, 0.06); lg.add(bt);
+    holder.legs.push(lg);
+  }
+  add(new THREE.BoxGeometry(0.42, 0.56, 0.24), L(0xff7a00), 0, 1.22, 0);
+  add(new THREE.BoxGeometry(0.43, 0.05, 0.245), L(0xd6ff3a), 0, 1.3, 0);
+  add(new THREE.SphereGeometry(0.11, 16, 12), L(0xe0b48a), 0, 1.66, 0);
+  add(new THREE.SphereGeometry(0.125, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), L(0xffd21f), 0, 1.68, 0);
+  add(new THREE.BoxGeometry(0.2, 0.015, 0.1), L(0xffd21f), 0, 1.68, 0.12);
+  for (const s of [-1, 1]) {
+    const sh = new V3(s * 0.25, 1.42, 0), hd = new V3(s * 0.125, 1.15, 0.4);
+    Pn.add(cylBetween(sh, hd, 0.045, L(0xff7a00)));
+    const h = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), L(0xe0b48a)); h.position.copy(hd); Pn.add(h);
+  }
+})();
+
+export function faceInstrument() {
+  if (holder.walking) return;
+  const p = holder.group.position;
+  holder.group.rotation.y = Math.atan2(instPos.x - p.x, instPos.z - p.z);
+}
+export function placeHolderAt(pt) {
+  holder.group.position.set(pt.x, groundH(pt.x, pt.z), pt.z);
+  holder.walking = false; holder.station = pt;
+  holder.legs.forEach(l => (l.rotation.x = 0));
+  faceInstrument();
+}
+const crossesWater = (x0, z0, x1, z1) => { for (let t = 0; t <= 1; t += 0.04) if (isWater(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)) return true; return false; };
+function planRoute(x0, z0, x1, z1) {
+  if (!BRG || !crossesWater(x0, z0, x1, z1)) return [];
+  const e = BRG.hl + 1.5, a = { x: BRG.x - BRG.ux * e, z: BRG.z - BRG.uz * e }, b = { x: BRG.x + BRG.ux * e, z: BRG.z + BRG.uz * e };
+  return Math.hypot(x0 - a.x, z0 - a.z) < Math.hypot(x0 - b.x, z0 - b.z) ? [a, b] : [b, a];
+}
+export function sendTo(pt) {
+  if (!pt || holder.walking || (holder.station && holder.station.id === pt.id)) return false;
+  const g = holder.group.position;
+  holder.route = planRoute(g.x, g.z, pt.x, pt.z);   // يعبر النهر عبر الجسر إن وُجد
+  holder.target = pt; holder.walking = true; holder.station = null;
+  return true;
+}
+export function updateHolder(dt) {
+  if (!holder.walking) return;
+  const g = holder.group, wp = holder.route && holder.route.length ? holder.route[0] : null, t = wp || holder.target;
+  const dx = t.x - g.position.x, dz = t.z - g.position.z, d = Math.hypot(dx, dz);
+  if (d < 0.2) { if (wp) { holder.route.shift(); return; } placeHolderAt(holder.target); return; }
+  const k = Math.min(3.2 * dt, d) / d;
+  g.position.x += dx * k; g.position.z += dz * k;
+  g.position.y = groundH(g.position.x, g.position.z);
+  g.rotation.y = Math.atan2(dx, dz);
+  holder.phase += dt * 9;
+  holder.legs[0].rotation.x = Math.sin(holder.phase) * 0.6;
+  holder.legs[1].rotation.x = -Math.sin(holder.phase) * 0.6;
+}
+import * as THREE from 'three';
+import { holder } from './world.js';
+
+// الميرا والقطب يميلان حول قاعدتهما (tiltG)
+const tiltG = new THREE.Group(); holder.group.add(tiltG);
+const g = new THREE.Group(); g.visible = false; tiltG.add(g);
+const L = c => new THREE.MeshLambertMaterial({ color: c });
+
+function plateTex() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, 128, 128);
+  x.fillStyle = '#ff7a00'; x.fillRect(0, 0, 128, 16); x.fillRect(0, 112, 128, 16); x.fillRect(0, 0, 16, 128); x.fillRect(112, 0, 16, 128);
+  x.fillStyle = '#1f3b5c'; x.beginPath(); x.arc(64, 64, 30, 0, 7); x.fill();
+  x.strokeStyle = '#fff'; x.lineWidth = 3; x.beginPath(); x.moveTo(64, 36); x.lineTo(64, 92); x.moveTo(36, 64); x.lineTo(92, 64); x.stroke();
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 1, 8), L(0x333333)); g.add(pole);
+export const prismFace = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.2), new THREE.MeshBasicMaterial({ map: plateTex() })); g.add(prismFace);
+const prism = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.05, 20), L(0x1f3b5c)); prism.rotation.x = Math.PI / 2; g.add(prism);
+
+let hr = 1.5;
+export function setPrismHeight(h) {
+  hr = Math.min(2.6, Math.max(0.8, h));
+  pole.scale.y = hr + 0.3; pole.position.y = (hr + 0.3) / 2;
+  prismFace.position.set(0, hr, 0.0115); prism.position.set(0, hr, 0.03);
+}
+export const getPrismHeight = () => hr;
+
+const body = holder.group.children.find(o => o.isMesh && o.geometry.type === 'BoxGeometry');
+if (body) tiltG.add(body);
+tiltG.add(holder.face);
+export function setTarget(kind) {
+  const ps = kind === 'prism';
+  g.visible = ps; if (body) body.visible = !ps; holder.face.visible = !ps;
+}
+// خطأ صفر الميرا: يُزاح التدريج عن قاعدتها
+export function setStaffZero(e) { holder.face.position.y = 2 + e; }
+// ميلان الميرا/القطب (راديان): lean أمام/خلف (موجب نحو الجهاز) و roll جانبي
+let lean = 0, roll = 0;
+export function setStaffTilt(l, r) { lean = l; roll = r; tiltG.rotation.set(l, 0, r); }
+export const getStaffTilt = () => ({ lean, roll });
+setPrismHeight(1.5);

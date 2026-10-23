@@ -1,0 +1,4 @@
+<div class="row"><label class="chk"><input type="checkbox" id="cfgErr"> محاكاة أخطاء الجهاز (واقعية)</label></div>
+      <div class="row"><label>حجم الأخطاء</label><select id="cfgErrK"><option value="1">واقعي ×1</option><option value="2">أكبر ×2</option><option value="4">مبالغ للتدريب ×4</option></select><button id="btnErrShow">🔎 اكشف أخطاء هذا الجهاز</button></div>
+      <div id="errInfo" class="note"></div>
+      

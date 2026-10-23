@@ -1,0 +1,31 @@
+<section id="t2">
+      <!-- NIVO-V4 -->
+      <div class="dg-only"><div id="lcd">—</div></div>
+      <div class="tc-only">
+        <canvas id="rdwin"></canvas>
+        <div class="row"><b style="font-size:12px">كمانة الدائرة الرأسية:</b><span id="idxStat" class="stat" style="margin:0"></span></div>
+        <canvas id="idxv"></canvas>
+        <div class="row"><label>برغي الفهرس</label><button data-ix="-1">◀◀</button><button data-ix="-0.1">◀</button><button data-ix="0.1">▶</button><button data-ix="1">▶▶</button></div>
+      </div>
+      <div class="row"><button id="btnClamp">🔓 المثبّت: محرَّر</button><button id="btnClampV" class="tt-only">🔓 رأسي</button><button id="btnAim">👁️ توجيه بالمنظار الأولي</button><button id="btnFull">⛶ المنظار بكامل الشاشة</button></div>
+      <div class="row"><label>الدوران الأفقي</label><div id="jog"><div id="jogT"></div><b id="hdgVal">0°</b></div></div>
+      <div class="row"><button data-rot="-45">−45°</button><button data-rot="-10">−10°</button><button data-rot="10">+10°</button><button data-rot="45">+45°</button></div>
+      <div class="row"><label>حركة بطيئة</label><button id="slL" class="hold">↺ يسار</button><button id="slR" class="hold">يمين ↻</button></div>
+      <div class="tt-only">
+        <div class="row"><label>دوران رأسي</label><button data-vr="10">▲10°</button><button data-vr="1">▲1°</button><button data-vr="-1">▼1°</button><button data-vr="-10">▼10°</button></div>
+        <div class="row"><label>رأسي بطيء</label><button id="slU" class="hold">▲</button><button id="slD" class="hold">▼</button><button id="btnPlunge">🔄 قلب المنظار</button><button id="btn0Set">0SET</button></div>
+        <div class="row"><button id="btnHI">📏 قياس ارتفاع الجهاز</button><input id="inHI" type="number" step="0.001" inputmode="decimal" placeholder="i (م)"></div>
+      </div>
+      <div class="row"><label>العدسة العينية</label><input type="range" id="eye" min="0" max="1" step="0.005" value="0.95"></div>
+      <div class="row"><label>التبئير</label><input type="range" id="foc" min="0" max="1" step="0.002" value="0.1"></div>
+      <div class="row"><label>أرسل الهدف إلى</label><div id="ptBtns" class="plist"></div><button id="btnMoveInst" class="zap">🔭 نقل الجهاز</button></div>
+      <div class="lv-only"><div class="row"><select id="rdType" style="flex:0 0 auto;min-width:110px"><option value="bs">BS خلفية</option><option value="is">IS متوسطة</option><option value="fs">FS أمامية</option></select><input id="inRead" type="number" inputmode="decimal" step="0.001" placeholder="القراءة (م) مثل 1.423"><input id="inDist" type="number" inputmode="decimal" step="0.1" placeholder="المسافة (م) اختياري"><button id="btnRead" class="big">➕ للدفتر</button></div></div>
+      <div class="stad-only">
+        <div class="tc-only"><div class="row"><label>Hz</label><input id="inHzD" type="number" inputmode="decimal" step="1" placeholder="°"><input id="inHzM" type="number" inputmode="decimal" step="0.1" placeholder="′ (0–60)"><label>V</label><input id="inVD" type="number" inputmode="decimal" step="1" placeholder="°"><input id="inVM" type="number" inputmode="decimal" step="0.1" placeholder="′ (0–60)"></div></div>
+        <div class="row"><input id="inU" type="number" inputmode="decimal" step="0.001" placeholder="U العليا"><input id="inM" type="number" inputmode="decimal" step="0.001" placeholder="M الوسطى"><input id="inL" type="number" inputmode="decimal" step="0.001" placeholder="L السفلى"><button id="btnThRec" class="big th-only">➕ تسجيل</button><button id="btnTcRec" class="big tc-only">➕ تسجيل</button></div>
+      </div>
+      <div class="ts-only"><div class="row"><label>hr (م)</label><input id="inHr" type="number" inputmode="decimal" step="0.001" value="1.500"><select id="bsSel" style="min-width:90px"></select><button id="btnOrient">🧭 ضبط الاتجاه</button><button id="btnMeasTS" class="big">📏 قياس وحفظ</button></div></div>
+      <div id="readMsg" class="stat"></div>
+      <p class="note">الدوران الأفقي لا نهائي: اسحب الشريط يميناً أو يساراً بلا حدود. على الحاسوب: ← → للحركة البطيئة (مع ربط المثبّت). في التيودوليت والتاكيومترات: اربط المثبّتين (الأفقي والرأسي) قبل الحركة البطيئة، و«قلب المنظار» ينقلك للوجه II. في التاكيومتر اليدوي مركِز كمانة الدائرة الرأسية ببرغي الفهرس قبل كل قراءة V، وقدّر الدقائق إلى 0.1′.</p>
+    </section>
+    

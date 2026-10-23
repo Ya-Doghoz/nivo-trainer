@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>مدرّب أجهزة المسح</title>
+<style>
+:root{--k:.9;--pw:min(440px,36vw)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#fff;font-family:system-ui,Tahoma,sans-serif}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+button,select{background:#243044;color:#fff;border:1px solid #3a4a62;border-radius:10px;padding:calc(8px*var(--k)) calc(10px*var(--k));font:inherit;font-size:calc(13px*var(--k));touch-action:manipulation}
+select{flex:1;min-width:130px}
+button.on{background:#2f6fed;border-color:#7aa5ff}
+button.big{background:#1f7a4d;border-color:#46c486}
+button.zap{background:#8a5a00;border-color:#e0a030}
+button:disabled{opacity:.45}
+#err{position:fixed;top:0;left:0;right:0;background:#a22;color:#fff;font-size:12px;padding:6px 10px;z-index:40;display:none;direction:ltr;text-align:left}
+#loading{position:fixed;inset:0;background:#000c;display:none;align-items:center;justify-content:center;z-index:30;font-size:18px}
+#top{position:fixed;top:0;left:0;right:0;display:flex;gap:6px;padding:6px;z-index:6;overflow-x:auto}
+#top button{white-space:nowrap;background:#000a}
+#top button.on{background:#2f6fed}
+#scope{position:fixed;top:52px;left:8px;width:min(34vw,150px);aspect-ratio:1;z-index:5;display:none;touch-action:none}
+#scope.full{top:48px;left:50%;transform:translateX(-50%);width:min(96vw,50vh)}
+#scope .ring{position:absolute;inset:0;border-radius:50%;border:3px solid #222;box-shadow:inset 0 0 0 2px #888;pointer-events:none}
+#hud{position:absolute;left:8px;top:5px;font-size:11px;text-shadow:0 0 3px #000;pointer-events:none;white-space:pre;direction:ltr;text-align:left}
+#btnExit{position:fixed;top:52px;right:8px;display:none;z-index:8;background:#a33}
+#toast{position:fixed;top:56px;left:50%;transform:translateX(-50%);background:#000d;padding:8px 14px;border-radius:20px;z-index:20;opacity:0;transition:opacity .3s;pointer-events:none;font-size:13px;max-width:90vw;text-align:center}
+#labels{position:fixed;inset:0;z-index:3;pointer-events:none;display:none}
+.lbl{position:absolute;left:0;top:0;pointer-events:auto;font-size:10px;background:#000b;border:1px solid #ffd34d;border-radius:8px;padding:2px 5px;white-space:nowrap}
+.lbl.l{--sx:calc(-100% - 8px)}.lbl.r{--sx:8px}
+.lbl.sel{background:#b8860b}
+#sheet{position:fixed;left:0;right:0;bottom:0;max-height:38vh;display:flex;flex-direction:column;background:rgba(14,17,23,.96);border-top:1px solid #2a3340;border-radius:14px 14px 0 0;z-index:7;transition:transform .25s}
+#sheet.min{transform:translateY(calc(100% - 40px))}
+#tabs{display:flex;gap:4px;padding:4px;flex:none;overflow-x:auto}
+#tabs button{flex:1 0 auto;padding:calc(6px*var(--k)) 8px;font-size:calc(11px*var(--k));white-space:nowrap}
+#panels{flex:1;min-height:0;overflow-y:auto;padding:4px 10px 14px;touch-action:pan-y}
+#panels section{display:none}#panels section.on{display:block}
+.row{display:flex;align-items:center;gap:8px;margin:calc(7px*var(--k)) 0;flex-wrap:wrap}
+.row label{font-size:calc(12px*var(--k));min-width:78px;color:#aab}
+.row label.chk{min-width:0;color:#dde}
+input[type=range]{flex:1;min-width:110px}
+input[type=number]{flex:1;min-width:80px;background:#111823;border:1px solid #3a4a62;color:#fff;border-radius:8px;padding:8px;font:inherit;font-size:calc(13px*var(--k))}
+#lv{display:block;margin:6px auto;width:min(100%,260px);aspect-ratio:1;touch-action:none;background:#0a0d12;border-radius:12px}
+#hv{display:block;margin:6px auto;width:min(100%,170px);aspect-ratio:1;background:#0a0d12;border-radius:12px}
+.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
+.stat{font-size:calc(13px*var(--k));margin:6px 0;min-height:18px}
+.ok{color:#7ee787}.bad{color:#ff7b72}.warn{color:#f2cc60}
+.note,small{font-size:calc(12px*var(--k));color:#99a;line-height:1.6}
+.st{font-size:calc(13px*var(--k));margin:6px 0;line-height:1.6}.st.done{color:#7ee787}
+.plist{display:flex;flex-wrap:wrap;gap:6px}
+#partInfo h4{margin:10px 0 4px}#partInfo p{margin:0;font-size:calc(13px*var(--k));line-height:1.7}
+table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}
+td,th{border:1px solid #33425a;padding:4px;text-align:center}
+.hold{touch-action:none;user-select:none;-webkit-user-select:none}
+details{background:#111823;border:1px solid #2a3340;border-radius:10px;padding:2px 8px;margin:8px 0}
+summary{font-size:calc(13px*var(--k));padding:6px 0}
+.lgv{min-width:58px;font-size:12px}
+#jog{position:relative;flex:1;min-width:140px;height:calc(44px*var(--k));border:1px solid #3a4a62;border-radius:10px;overflow:hidden;background:#111823;touch-action:none;cursor:ew-resize}
+#jogT{position:absolute;inset:0;background:repeating-linear-gradient(90deg,#6a7a92 0 2px,transparent 2px 20px);opacity:.75}
+#jog::after{content:'';position:absolute;left:50%;top:0;bottom:0;width:2px;background:#ff9f43}
+#jog b{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:#000b;padding:2px 8px;border-radius:8px;font-size:calc(13px*var(--k));z-index:1}
+#lanInfo,#fbSum,#evalBox,#ttSum{white-space:pre-line}
+#lanInfo{direction:ltr;text-align:left}
+#lcd{width:100%;white-space:pre;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:calc(14px*var(--k));background:#07140c;color:#7dff9b;border:1px solid #1f4a2c;border-radius:8px;padding:8px;line-height:1.5;direction:ltr;text-align:left;margin:4px 0}
+
+/* إظهار عناصر كل جهاز */
+body[data-inst="level"] :is(.tt-only,.stad-only,.ts-only,.dg-only,.tc-only,.th-only){display:none!important}
+body[data-inst="theo"] :is(.lv-only,.ts-only,.tc-only){display:none!important}
+body[data-inst="tach"] :is(.lv-only,.ts-only,.dg-only,.th-only){display:none!important}
+body[data-inst="ts"] :is(.lv-only,.stad-only,.tc-only,.th-only){display:none!important}
+#rdwin,#idxv{display:block;width:100%;max-width:360px;margin:6px auto;background:#161616;border-radius:8px}
+#errInfo{white-space:pre-line}
+
+/* الجداول */
+#fbWrap,#ttWrap{overflow-x:auto;border:1px solid #2a3340;border-radius:10px;margin-top:6px}
+#fb,#tt{direction:ltr;min-width:620px;margin:0}
+#fb th,#tt th{background:#18202c}
+#fb input,#fb select,#tt input,#tt select{width:100%;min-width:56px;background:#111823;color:#fff;border:1px solid #3a4a62;border-radius:6px;padding:4px;font-size:12px;text-align:center}
+#fb select,#tt select{min-width:64px;flex:none}
+#fb input.ok{border-color:#3fb950;background:#12281a}
+#fb input.warn{border-color:#d29922;background:#2a2410}
+#fb input.bad{border-color:#f85149;background:#2d1517}
+#fb td.calc,#tt td.calc{white-space:nowrap;font-variant-numeric:tabular-nums}
+#csvBox{width:100%;height:90px;margin-top:6px;background:#111823;color:#fff;border:1px solid #3a4a62;border-radius:8px}
+
+/* الخريطة */
+#mapBox{position:fixed;inset:0;background:#0b0f16;z-index:12;overflow-y:auto;display:none;padding:8px}
+#mapHead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#mapTools{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+#mapBody{display:block}
+#mapC{display:block;margin:6px auto;border-radius:10px;touch-action:none;cursor:crosshair}
+#mapList{margin-top:8px}
+.mrow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #1d2733;font-size:13px;flex-wrap:wrap}
+.mrow input{width:110px;background:#111823;border:1px solid #3a4a62;color:#fff;border-radius:6px;padding:4px}
+.mrow button{padding:4px 8px}
+.mi.bm{color:#3fb950}.mi.pt{color:#ff6b6b}.mi.st{color:#4dabf7}
+.mx{color:#8a96a8;font-size:12px;direction:ltr}
+
+/* حاسوب / شاشة عريضة: لوحة جانبية */
+@media (min-width:760px) and (min-aspect-ratio:5/4){
+  #sheet{left:auto;right:0;top:0;bottom:0;width:var(--pw);max-height:none;border-radius:0;border-top:0;border-left:1px solid #2a3340}
+  #sheet.min{transform:none}
+  #sheetToggle{display:none}
+  #top{right:var(--pw)}
+  #scope{width:min(24vw,240px)}
+  #scope.full{left:calc((100vw - var(--pw)) / 2);width:min(calc(100vh - 70px),calc(100vw - var(--pw) - 30px))}
+  #btnExit{right:calc(var(--pw) + 8px)}
+  #lv{width:min(100%,300px)}
+  #mapBody{display:flex;gap:14px;align-items:flex-start}
+  #mapList{flex:1;margin-top:0;max-height:82vh;overflow:auto}
+}
+</style>
+<script type="importmap">{"imports":{"three":"/three/build/three.module.js"}}</script>
+</head>
+<body data-inst="level">
+<canvas id="c"></canvas>
+<div id="err"></div>
+<div id="loading">⏳ جاري توليد العالم…</div>
+<div id="labels"></div>
+<div id="top">
+  <button id="btnMap" class="zap">🗺 الخريطة</button>
+  <button id="btnInst" class="zap">🔧 النيفو</button>
+  <button data-cam="all">🌍 عام</button>
+  <button data-cam="tripod" class="on">🦵 الحامل</button>
+  <button data-cam="inst">🔭 الجهاز</button>
+  <button data-cam="staff">📏 الهدف</button>
+  <button id="btnExplode">💥 تفكيك</button>
+</div>
+<div id="scope"><div class="ring"></div><div id="hud"></div></div>
+<button id="btnExit">✕ خروج</button>
+<div id="toast"></div>
+
+<div id="mapBox">
+  <div id="mapHead"><b>🗺 الخريطة والمهمة — البذرة <span id="mapSeed"></span></b><button id="mapClose">✕ إغلاق</button></div>
+  <div id="mapTools">
+    <button data-mt="pt" class="on">📍 نقطة</button>
+    <button data-mt="bm">🧷 BM</button>
+    <button data-mt="inst">🔭 جهاز</button>
+    <button data-mt="staff">👷 ميرا/منشور</button>
+    <button data-mt="move">✋ تحريك</button><button data-mt="pin">📌 تثبيت</button><button data-mt="del">🗑 حذف</button>
+    <button id="btnJobRnd" class="zap">🎲 مهمة عشوائية</button>
+    <button id="btnWorldRnd" class="zap">🌍 عالم جديد</button>
+  </div>
+  <div id="mapBody">
+    <canvas id="mapC"></canvas>
+    <div id="mapList"></div>
+  </div>
+  <p class="note" id="mapNote">اختر أداة ثم المس الخريطة. 📍 نقطة مسح · 🧷 BM معلوم (منسوبه وإحداثياته في القائمة) · 🔭 يضع الجهاز في ذلك الموضع (ويعيد ضبطه) · 👷 يرسل الحامل إلى أقرب نقطة · 🗑 يحذف. الخطوط الكنتورية بالأمتار وشبكة كل 20 م. ▲ BM · ● نقطة · ◆ موضع جهاز. الإحداثيات: E شرقاً و N شمالاً.</p>
+</div>
+
+<div id="sheet">
+  <div id="tabs">
+    <button data-t="t1" class="on">🧭 تسوية</button>
+    <button data-t="t2">🎯 مسح</button>
+    <button data-t="t6" class="lv-only">📒 دفتر</button>
+    <button data-t="t7" class="tt-only">📐 قياس</button>
+    <button data-t="t3">✅ خطوات</button>
+    <button data-t="t4">🔩 أجزاء</button>
+    <button data-t="t5">⚙️ إعدادات</button>
+    <button id="sheetToggle" style="flex:0 0 36px">⇅</button>
+  </div>
+  <div id="panels">
+    <section id="t1" class="on">
+      <div class="row"><button id="btnMountOnly" class="big">🔧 ركّب الجهاز</button><button id="btnMount" class="zap">⚡ تركيب فوري</button><button id="btnLevelNow" class="zap">⚡ موازنة فورية</button></div>
+      <details id="legsBox" open>
+        <summary>🦵 الأرجل وبزال التثبيت + كمانة الرأس</summary>
+        <div class="row"><label>ارتفاع الحامل</label><input type="range" id="hSl" min="1.1" max="1.8" step="0.01" value="1.75"><b id="hVal">1.75 م</b></div>
+        <div class="row"><button class="lk" data-lk="0">🔓 1</button><input type="range" class="lg" data-lg="0" min="-25" max="25" step="0.5" value="0"><b class="lgv" data-lv="0">0.0 مم</b></div>
+        <div class="row"><button class="lk" data-lk="1">🔓 2</button><input type="range" class="lg" data-lg="1" min="-25" max="25" step="0.5" value="0"><b class="lgv" data-lv="1">0.0 مم</b></div>
+        <div class="row"><button class="lk" data-lk="2">🔓 3</button><input type="range" class="lg" data-lg="2" min="-25" max="25" step="0.5" value="0"><b class="lgv" data-lv="2">0.0 مم</b></div>
+        <canvas id="hv"></canvas>
+        <div id="headStat" class="stat"></div>
+        <div class="row"><button id="btnLegsLock">🔒 بدّل ربط الكل</button><button id="btnLegsLevel">⚡ موازنة الأرجل</button></div>
+        <p class="note">الفقاعة تتجه نحو الساق الأعلى: قصّر تلك الساق أو طوّل المقابلة. حرّر البزال (🔓) ثم غيّر الطول ثم اربطه (🔒). كل 1 مم ≈ 0.5° ميلان لرأس الحامل. الدائرة البيضاء = ±0.5°.</p>
+      </details>
+      <canvas id="lv"></canvas>
+      <div id="lvStat" class="stat"></div>
+      <div class="row"><button id="btnFine">🎯 ضبط دقيق: إيقاف</button></div>
+      <div class="grid">
+        <button data-sc="0,-1">A ↺</button><button data-sc="0,1">A ↻</button>
+        <button data-sc="1,-1">B ↺</button><button data-sc="1,1">B ↻</button>
+        <button data-sc="2,-1">C ↺</button><button data-sc="2,1">C ↻</button>
+      </div>
+      <p class="note">اسحب بحركة دائرية فوق أي برغي لتدويره (ويمكن برغيَّين بإصبعين). ↻ مع عقارب الساعة = يرتفع ذلك الطرف. «الضبط الدقيق» يجعل الحركة أنعم (للتيودوليت والتاكيومتر). السهم البرتقالي = اتجاه المنظار. في التيودوليت تظهر الكمانة الأنبوبية وتقرأ على محورها فقط: دوّر الجهاز 90° لقراءة المحور الآخر.</p>
+    </section>
+    <section id="t2">
+      <!-- NIVO-V4 -->
+      <div class="dg-only"><div id="lcd">—</div></div>
+      <div class="tc-only">
+        <canvas id="rdwin"></canvas>
+        <div class="row"><b style="font-size:12px">كمانة الدائرة الرأسية:</b><span id="idxStat" class="stat" style="margin:0"></span></div>
+        <canvas id="idxv"></canvas>
+        <div class="row"><label>برغي الفهرس</label><button data-ix="-1">◀◀</button><button data-ix="-0.1">◀</button><button data-ix="0.1">▶</button><button data-ix="1">▶▶</button></div>
+      </div>
+      <div class="row"><button id="btnClamp">🔓 المثبّت: محرَّر</button><button id="btnClampV" class="tt-only">🔓 رأسي</button><button id="btnAim">👁️ توجيه بالمنظار الأولي</button><button id="btnFull">⛶ المنظار بكامل الشاشة</button></div>
+      <div class="row"><label>الدوران الأفقي</label><div id="jog"><div id="jogT"></div><b id="hdgVal">0°</b></div></div>
+      <div class="row"><button data-rot="-45">−45°</button><button data-rot="-10">−10°</button><button data-rot="10">+10°</button><button data-rot="45">+45°</button></div>
+      <div class="row"><label>حركة بطيئة</label><button id="slL" class="hold">↺ يسار</button><button id="slR" class="hold">يمين ↻</button></div>
+      <div class="tt-only">
+        <div class="row"><label>دوران رأسي</label><button data-vr="10">▲10°</button><button data-vr="1">▲1°</button><button data-vr="-1">▼1°</button><button data-vr="-10">▼10°</button></div>
+        <div class="row"><label>رأسي بطيء</label><button id="slU" class="hold">▲</button><button id="slD" class="hold">▼</button><button id="btnPlunge">🔄 قلب المنظار</button><button id="btn0Set">0SET</button></div>
+        <div class="row"><button id="btnHI">📏 قياس ارتفاع الجهاز</button><input id="inHI" type="number" step="0.001" inputmode="decimal" placeholder="i (م)"></div>
+      </div>
+      <div class="row"><label>ميلان الميرا</label><input type="range" id="tiltL" min="-8" max="8" step="0.1" value="0"><b id="tiltLv" style="min-width:48px">0.0°</b></div>
+      <div class="row"><label>ميل جانبي</label><input type="range" id="tiltR" min="-8" max="8" step="0.1" value="0"><b id="tiltRv" style="min-width:48px">0.0°</b><canvas id="stBub" width="60" height="60" style="width:44px;height:44px;border-radius:50%;background:#0a0d12"></canvas></div>
+      <div class="row"><button id="btnRock">🔄 تأرجح الميرا (خذ أصغر قراءة)</button><button id="btnPlumb">⬆ اجعلها شاقولية</button></div>
+      
+<div class="row"><label>العدسة العينية</label><input type="range" id="eye" min="0" max="1" step="0.005" value="0.95"></div>
+      <div class="row"><label>التبئير</label><input type="range" id="foc" min="0" max="1" step="0.002" value="0.1"></div>
+      <div class="row"><label>أرسل الهدف إلى</label><div id="ptBtns" class="plist"></div><button id="btnMoveInst" class="zap">🔭 نقل الجهاز</button></div>
+      <div class="lv-only"><div class="row"><select id="rdType" style="flex:0 0 auto;min-width:110px"><option value="bs">BS خلفية</option><option value="is">IS متوسطة</option><option value="fs">FS أمامية</option></select><input id="inRead" type="number" inputmode="decimal" step="0.001" placeholder="القراءة (م) مثل 1.423"><input id="inDist" type="number" inputmode="decimal" step="0.1" placeholder="المسافة (م) اختياري"><button id="btnRead" class="big">➕ للدفتر</button></div></div>
+      <div class="stad-only">
+        <div class="tc-only"><div class="row"><label>Hz</label><input id="inHzD" type="number" inputmode="decimal" step="1" placeholder="°"><input id="inHzM" type="number" inputmode="decimal" step="0.1" placeholder="′ (0–60)"><label>V</label><input id="inVD" type="number" inputmode="decimal" step="1" placeholder="°"><input id="inVM" type="number" inputmode="decimal" step="0.1" placeholder="′ (0–60)"></div></div>
+        <div class="row"><input id="inU" type="number" inputmode="decimal" step="0.001" placeholder="ق ع (العليا)"><input id="inM" type="number" inputmode="decimal" step="0.001" placeholder="ق و (الوسطى)"><input id="inL" type="number" inputmode="decimal" step="0.001" placeholder="ق س (السفلى)"><button id="btnThRec" class="big th-only">➕ تسجيل</button></div>
+        <div class="tc-only">
+          <div class="row"><input id="inK" type="number" inputmode="decimal" step="0.001" placeholder="K"><input id="inS" type="number" inputmode="decimal" step="0.001" placeholder="S (شعيرة التصويب)"><button id="btnTcRec" class="big">➕ تسجيل</button></div>
+          <div id="kHint" class="note"></div>
+        </div>
+      </div>
+      
+<div class="ts-only"><div class="row"><label>hr (م)</label><input id="inHr" type="number" inputmode="decimal" step="0.001" value="1.500"><select id="bsSel" style="min-width:90px"></select><button id="btnOrient">🧭 ضبط الاتجاه</button><button id="btnMeasTS" class="big">📏 قياس وحفظ</button></div></div>
+      <div id="readMsg" class="stat"></div>
+      <p class="note">الدوران الأفقي لا نهائي: اسحب الشريط يميناً أو يساراً بلا حدود. على الحاسوب: ← → للحركة البطيئة (مع ربط المثبّت). في التيودوليت والتاكيومترات: اربط المثبّتين (الأفقي والرأسي) قبل الحركة البطيئة، و«قلب المنظار» ينقلك للوجه II. في التاكيومتر اليدوي مركِز كمانة الدائرة الرأسية ببرغي الفهرس قبل كل قراءة V، وقدّر الدقائق إلى 0.1′.</p>
+    </section>
+    
+<section id="t6">
+      <div class="row"><button id="btnAddRow">➕ صف</button><button id="btnDelRow">🗑 آخر صف</button><button id="btnClearFb">🧹 مسح الكل</button><button id="btnEval" class="big">📊 تقييم</button><button id="btnCsv">📋 CSV</button></div>
+      <div id="fbWrap"><table id="fb"></table></div>
+      <div id="fbSum" class="note"></div>
+      <div id="evalBox" class="stat"></div>
+      <textarea id="csvBox" style="display:none"></textarea>
+      <p class="note">طريقة الارتفاع (HI): HI = RL + BS، و RL = HI − (IS أو FS). النقطة التحويلية: FS من الموضع القديم ثم BS من الجديد على نفس الصف. فحص الحساب: ΣBS − ΣFS = RL الأخير − RL الأول.</p>
+    </section>
+    <section id="t7">
+      <div class="row"><button id="btnTtDel">🗑 آخر صف</button><button id="btnTtClear">🧹 مسح الكل</button><button id="btnTtEval" class="big">📊 تقييم</button><button id="btnTtCsv">📋 CSV</button></div>
+      <div id="ttWrap"><table id="tt"></table></div>
+      <div id="ttSum" class="note"></div>
+      <textarea id="ttCsvBox" style="display:none;width:100%;height:90px;margin-top:6px;background:#111823;color:#fff;border:1px solid #3a4a62;border-radius:8px"></textarea>
+      <p class="note stad-only">التيودوليت (ستاديا): s = U − L، α = 90° − Z، D = 100·s·cos²α، ΔZ = i + 50·s·sin2α − M. التاكيومتر اليدوي (ذاتي الاختزال): D = (ق ع − ق س)×100 = (ق ع − ق و)×200، ΔH = (ق ع − ق و)×K + J − S، Z = Zs + ΔH. كرّر القياس بالوجهين لتقدير خطأ الفهرس وانحراف خط النظر.</p>
+      
+<p class="note ts-only">التاكيومتر الآلي: HD = SD·sinZ، VD = SD·cosZ، N = Ns + HD·cosAz، E = Es + HD·sinAz، Z = Zs + i + VD − hr. اضبط الاتجاه أولاً على BS معلوم.</p>
+    </section>
+    
+<section id="t3">
+      <div id="steps"></div>
+      <div class="row"><button id="btnHint">💡 تلميح</button></div>
+      <div id="hint" class="stat"></div>
+    </section>
+    <section id="t4">
+      <p class="note">اضغط على جزء لتفكيك الجهاز وقراءة وظيفته:</p>
+      <div id="partsList" class="plist"></div>
+      <div id="partInfo"></div>
+    </section>
+    <section id="t5">
+      <div class="row"><label>🔧 الجهاز</label>
+        <select id="cfgInst"><option value="level">النيفو (Level)</option><option value="theo">التيودوليت الرقمي (Theodolite)</option><option value="tach">التاكيومتر اليدوي (Optical Tacheometer)</option><option value="ts">التاكيومتر الآلي (Total Station)</option></select></div>
+      <div class="row"><label>الأرجل عند البدء</label>
+        <select id="cfgLegs"><option value="random">عشوائية الميل (أضبطها بنفسي)</option><option value="level">مُوازَنة ومربوطة مسبقاً</option></select></div>
+      <div class="row"><label>حالة الجهاز</label>
+        <select id="cfgState"><option value="off">غير مركّب</option><option value="mounted">مركّب (غير مسوّى)</option><option value="leveled">مركّب ومسوّى بالكامل</option></select></div>
+      <p class="note">الخياران يُطبَّقان عند البدء وعند نقل الجهاز لموضع جديد من الخريطة. مثال: «أرجل موازنة + مركّب» لا يبقى فيه إلا ضبط البراغي.</p>
+      <div class="row"><button id="btnRestart" class="big">🔄 أعد ضبط الجهاز بهذه الحالة</button></div>
+      <div class="row"><button id="btnLegsLevel2" class="zap">⚡ موازنة الأرجل فوراً</button><button id="btnScrewsNow" class="zap">⚡ موازنة البراغي فوراً</button></div>
+      <div class="row"><label>🌱 البذرة</label><input type="number" id="cfgSeed" min="1" step="1"><button id="btnSeedApply">تطبيق</button></div>
+      <div class="row"><button id="btnSeedRnd" class="zap">🎲 عالم عشوائي جديد</button><label class="chk"><input type="checkbox" id="cfgFix"> ثبّت البذرة عند كل تشغيل</label></div>
+      <p class="note">البذرة الحالية: <b id="seedLbl">—</b>. نفس البذرة تعطي نفس العالم، وإذا ثبّتتها يرجع نفس الدفتر والمهمة أيضاً.</p>
+      <div class="row"><label class="chk"><input type="checkbox" id="cfgErr"> محاكاة أخطاء الجهاز (واقعية)</label></div>
+      <div class="row"><label>حجم الأخطاء</label><select id="cfgErrK"><option value="1">واقعي ×1</option><option value="2">أكبر ×2</option><option value="4">مبالغ للتدريب ×4</option></select><button id="btnErrShow">🔎 اكشف أخطاء هذا الجهاز</button></div>
+      <div id="errInfo" class="note"></div>
+      
+<div class="row"><label class="chk"><input type="checkbox" id="cfgManual"> حساب HI وRL يدوياً في دفتر النيفو</label></div>
+      <div class="row"><label class="chk"><input type="checkbox" id="cfgExam"> وضع الامتحان (إخفاء التحقق حتى «تقييم»)</label></div>
+      <div class="row"><label>تدريج الميرا</label>
+        <select id="cfgPat"><option value="E">حرف E</option><option value="bars">شرائط وخطوط</option></select></div>
+      <div class="row"><label>ترقيم الميرا</label>
+        <select id="cfgLab"><option value="dots">رقم + نقاط حمراء</option><option value="pair">رقمان متجاوران (13)</option><option value="stack">رقمان فوق بعض (1 / 3)</option><option value="dec">عشري (1,3)</option></select></div>
+      <div class="row"><label>🌳 كثافة الأشجار</label><select id="cfgVeg"><option value="0">بدون أشجار</option><option value="0.25">قليلة جداً</option><option value="0.5">قليلة</option><option value="1">متوسطة</option><option value="1.6">كثيفة</option></select></div>
+      
+<div class="row"><label>الجودة</label>
+        <select id="cfgQ"><option value="1">منخفضة (أسرع)</option><option value="1.5">متوسطة</option><option value="2">عالية</option></select></div>
+      <div class="row"><label>حجم الواجهة</label>
+        <select id="cfgUI"><option value="0.75">صغير جداً</option><option value="0.9">صغير</option><option value="1">عادي</option></select></div>
+      <div class="row"><label>🌐 الشبكة المحلية</label><button id="btnLan">...</button></div>
+      <div id="lanInfo" class="note"></div>
+    </section>
+  </div>
+</div>
+<script type="module" src="/custom.js"></script>
+<script type="module" src="/main.js"></script>
+<script type="module" src="/extras.js"></script>
+<script type="module" src="/drone.js"></script>
+<script type="module" src="/logbook.js"></script>
+<script type="module" src="/help.js"></script>
+</body>
+</html>

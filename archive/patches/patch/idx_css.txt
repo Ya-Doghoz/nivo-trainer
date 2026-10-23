@@ -1,0 +1,8 @@
+/* إظهار عناصر كل جهاز */
+body[data-inst="level"] :is(.tt-only,.stad-only,.ts-only,.dg-only,.tc-only,.th-only){display:none!important}
+body[data-inst="theo"] :is(.lv-only,.ts-only,.tc-only){display:none!important}
+body[data-inst="tach"] :is(.lv-only,.ts-only,.dg-only,.th-only){display:none!important}
+body[data-inst="ts"] :is(.lv-only,.stad-only,.tc-only,.th-only){display:none!important}
+#rdwin,#idxv{display:block;width:100%;max-width:360px;margin:6px auto;background:#161616;border-radius:8px}
+#errInfo{white-space:pre-line}
+

@@ -1,0 +1,75 @@
+// ثلاث طبقات من الشبكة: دقيقة قرب المركز، متوسطة، وخشنة بعيداً (مع تنانير لإخفاء الشقوق)
+const PGc = [0.2, 0.43, 0.14], PDc = [0.56, 0.48, 0.27];
+function terrainColor(x, z, h, slope, out) {
+  const rr = Math.hypot(x, z), dry = localDry(x, z);
+  const n = fbm(x * 0.08 + P.ox, z * 0.08 + P.oz), m = vnoise(x * 0.4, z * 0.4);
+  let cr = PGc[0] + (PDc[0] - PGc[0]) * dry + 0.1 * n, cg = PGc[1] + (PDc[1] - PGc[1]) * dry + 0.18 * n + 0.04 * m, cb = PGc[2] + (PDc[2] - PGc[2]) * dry + 0.05 * n;
+  const fk = smooth(0.62, 0.68, vnoise(x * 0.017 + P.ox * 3, z * 0.017 + P.oz * 3)) * (1 - smooth(0.04, 0.12, slope)) * (1 - smooth(25, 55, h));
+  if (fk > 0) { const t = vnoise(x * 0.09, z * 0.09) > 0.5 ? 1 : 0.8; cr += (0.62 * t - cr) * fk * 0.8; cg += (0.55 * t - cg) * fk * 0.8; cb += (0.28 - cb) * fk * 0.8; }
+  const rk = clamp((slope - 0.12) * 4, 0, 1);
+  cr += (0.47 + 0.1 * m - cr) * rk; cg += (0.45 + 0.08 * m - cg) * rk; cb += (0.4 + 0.06 * m - cb) * rk;
+  const hi = smooth((P.mtn || 60) * 0.7, (P.mtn || 60) * 1.15, h);
+  if (hi > 0) { cr += (0.78 - cr) * hi * 0.6; cg += (0.79 - cg) * hi * 0.6; cb += (0.8 - cb) * hi * 0.6; }
+  const ri_ = riverInfo(x, z), rd = ri_.d < ri_.hw + 2.5 ? 0 : 1 - smooth(1.8, 3.4, Math.abs(x - roadX(z)));
+  cr += (0.62 - cr) * rd; cg += (0.52 - cg) * rd; cb += (0.38 - cb) * rd;
+  const mud = ri_.d < ri_.hw + 1.8 ? 1 : 1 - smooth(ri_.hw + 1.8, ri_.hw + 7, ri_.d);
+  if (mud > 0) { cr += (0.3 - cr) * mud * 0.85; cg += (0.27 - cg) * mud * 0.85; cb += (0.19 - cb) * mud * 0.85; }
+  out[0] = cr; out[1] = cg; out[2] = cb;
+}
+function tierMesh(half, cell, hole, mat) {
+  const N = Math.round(2 * half / cell), n1 = N + 1;
+  const cellIn = (i, j) => {
+    if (i < 0 || j < 0 || i >= N || j >= N) return false;
+    if (!hole) return true;
+    const cx = -half + (i + 0.5) * cell, cz = -half + (j + 0.5) * cell;
+    return !(Math.abs(cx) < hole && Math.abs(cz) < hole);
+  };
+  const H = new Float32Array(n1 * n1).fill(NaN);
+  const hAt = (i, j) => { i = Math.min(N, Math.max(0, i)); j = Math.min(N, Math.max(0, j)); const k = j * n1 + i; if (H[k] !== H[k]) H[k] = terrainH(-half + i * cell, -half + j * cell); return H[k]; };
+  const map = new Int32Array(n1 * n1).fill(-1), vi = [], tri = [];
+  const use = k => { if (map[k] < 0) { map[k] = vi.length; vi.push(k); } return map[k]; };
+  const edges = [];
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    if (!cellIn(i, j)) continue;
+    const ka = j * n1 + i, kb = ka + 1, kc = ka + n1, kd = kc + 1, a = use(ka), b = use(kb), c = use(kc), d = use(kd);
+    tri.push(a, c, b, b, c, d);
+    if (!cellIn(i, j - 1)) edges.push(ka, kb);
+    if (!cellIn(i, j + 1)) edges.push(kc, kd);
+    if (!cellIn(i - 1, j)) edges.push(ka, kc);
+    if (!cellIn(i + 1, j)) edges.push(kb, kd);
+  }
+  const nv = vi.length, pos = [], col = [], uv = [], tmp = [0, 0, 0], colOf = [];
+  for (let q = 0; q < nv; q++) {
+    const k = vi[q], i = k % n1, j = (k / n1) | 0, x = -half + i * cell, z = -half + j * cell, y = hAt(i, j);
+    const slope = Math.hypot(hAt(i + 1, j) - y, hAt(i, j + 1) - y) / cell;
+    terrainColor(x, z, y, slope, tmp);
+    pos.push(x, y, z); col.push(tmp[0], tmp[1], tmp[2]); uv.push(x * 0.157, z * 0.157);
+    colOf.push([tmp[0], tmp[1], tmp[2]]);
+  }
+  // تنانير على الحواف
+  let base = nv;
+  const skirt = (k1, k2) => {
+    [k1, k2].forEach(k => { const q = map[k], c = colOf[q], x = pos[q * 3], y = pos[q * 3 + 1], z = pos[q * 3 + 2]; pos.push(x, y, z); col.push(c[0], c[1], c[2]); uv.push(x * 0.157, z * 0.157); });
+    [k1, k2].forEach(k => { const q = map[k], c = colOf[q], x = pos[q * 3], y = pos[q * 3 + 1] - 3, z = pos[q * 3 + 2]; pos.push(x, y, z); col.push(c[0] * 0.8, c[1] * 0.8, c[2] * 0.8); uv.push(x * 0.157, z * 0.157); });
+    tri.push(base, base + 1, base + 3, base, base + 3, base + 2); base += 4;
+  };
+  for (let e = 0; e < edges.length; e += 2) skirt(edges[e], edges[e + 1]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(tri), 1));
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, mat); W.add(m);
+}
+function buildTerrain() {
+  const r0 = mulberry32(P.seed * 5 + 9), cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const c = cv.getContext('2d'); c.fillStyle = '#e0e0e0'; c.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 3000; i++) { const v = 150 + Math.floor(r0() * 90); c.fillStyle = `rgb(${v},${v},${v})`; c.fillRect(r0() * 256, r0() * 256, 1 + r0() * 2, 2 + r0() * 4); }
+  const tex = new THREE.CanvasTexture(cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: tex, side: THREE.DoubleSide });
+  tierMesh(240, 2.4, 0, mat);
+  tierMesh(480, 4, 240, mat);
+  tierMesh(TERH, 20, 480, mat);
+}
+

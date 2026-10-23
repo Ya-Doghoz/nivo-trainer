@@ -1,0 +1,4 @@
+<div class="row"><label>ميلان الميرا</label><input type="range" id="tiltL" min="-8" max="8" step="0.1" value="0"><b id="tiltLv" style="min-width:48px">0.0°</b></div>
+      <div class="row"><label>ميل جانبي</label><input type="range" id="tiltR" min="-8" max="8" step="0.1" value="0"><b id="tiltRv" style="min-width:48px">0.0°</b><canvas id="stBub" width="60" height="60" style="width:44px;height:44px;border-radius:50%;background:#0a0d12"></canvas></div>
+      <div class="row"><button id="btnRock">🔄 تأرجح الميرا (خذ أصغر قراءة)</button><button id="btnPlumb">⬆ اجعلها شاقولية</button></div>
+      

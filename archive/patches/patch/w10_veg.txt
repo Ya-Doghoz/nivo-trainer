@@ -1,0 +1,171 @@
+function buildVeg() {
+  VEG = [];
+  const K = vegK, r = mulberry32(P.seed * 31 + 7), dummy = new THREE.Object3D(), c = new THREE.Color();
+  const lam = () => new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const plain = (geo, mat, n) => { const m = new THREE.InstancedMesh(geo, mat, n); m.count = 0; m.frustumCulled = false; W.add(m); return m; };
+  const reg = (geo, mat, n) => { const o = { mesh: plain(geo, mat, n), n: 0, max: n, xz: [], base: new Float32Array(n * 16), hid: new Uint8Array(n) }; VEG.push(o); return o; };
+  const put = (o, x, z, rad) => {
+    if (o.n >= o.max) return -1;
+    dummy.updateMatrix(); dummy.matrix.toArray(o.base, o.n * 16); o.mesh.setMatrixAt(o.n, dummy.matrix); o.xz.push(x, z, rad);
+    return o.n++;
+  };
+  const fin = o => { o.mesh.count = o.n; o.mesh.instanceMatrix.needsUpdate = true; if (o.mesh.instanceColor) o.mesh.instanceColor.needsUpdate = true; };
+  const rndC = () => (r() - 0.5) * 540, rndF = () => (r() - 0.5) * 2 * (WH + 180);   // قرب المركز / على كامل الخريطة وما حولها
+  const slopeAt = (x, z, gy) => Math.max(Math.abs(groundH(x + 3, z) - gy), Math.abs(groundH(x, z + 3) - gy)) / 3;
+
+  // ---- أشجار: بقع غابات + أشجار منفردة + بساتين ----
+  const trunkG = new THREE.CylinderGeometry(0.12, 0.2, 1, 6); trunkG.translate(0, 0.5, 0);
+  const pineG = new THREE.ConeGeometry(1.2, 4.4, 7); pineG.translate(0, 2.2, 0);
+  const roundG = new THREE.IcosahedronGeometry(1.5, 1), MAXT = 2400;
+  const T0 = reg(trunkG, new THREE.MeshLambertMaterial({ color: 0x6b4a2b }), MAXT), T1 = reg(pineG, lam(), MAXT), T2 = reg(roundG, lam(), MAXT);
+  const addTree = (x, z, kind, sc) => {
+    if (T0.n >= MAXT || inRiver(x, z, 1.5)) return;
+    const gy = groundH(x, z), pine = kind === 'pine', ol = kind === 'olive';
+    dummy.rotation.set(0, r() * 6.28, 0);
+    dummy.position.set(x, gy - 0.1, z); dummy.scale.set(sc, (pine ? 1.4 : 2.2) * sc, sc); put(T0, x, z, (pine ? 1.2 : 1.5) * sc);
+    if (pine) {
+      dummy.position.set(x, gy + 0.9 * sc, z); dummy.scale.set(sc, sc, sc);
+      const k = put(T1, x, z, 1.2 * sc); if (k >= 0) { c.setHSL(0.33 + r() * 0.04, 0.45, 0.15 + r() * 0.08); T1.mesh.setColorAt(k, c); }
+    } else {
+      dummy.position.set(x, gy + (ol ? 1.9 : 2.9) * sc, z); dummy.scale.set(sc * (ol ? 0.9 : 1), sc * (ol ? 0.7 : 0.9), sc * (ol ? 0.9 : 1));
+      const k = put(T2, x, z, 1.5 * sc);
+      if (k >= 0) { const ld = localDry(x, z); if (ol) c.setHSL(0.22, 0.25, 0.38 + r() * 0.08); else c.setHSL(0.24 + r() * 0.08 - ld * 0.06, 0.5 - ld * 0.15, 0.26 + r() * 0.1); T2.mesh.setColorAt(k, c); }
+    }
+  };
+  const thr = { pinewood: 0.5, meadow: 0.58, steppe: 0.66, orchard: 0.6 }[P.biome];
+  const forest = (rnd, add, minR) => {
+    const lim = T0.n + add;
+    for (let i = 0; i < 90000 && T0.n < lim; i++) {
+      const x = rnd(), z = rnd();
+      if (Math.hypot(x, z) < minR || Math.abs(x - roadX(z)) < 6 || inRiver(x, z, 1.5)) continue;
+      const gy = groundH(x, z);
+      if (gy > (P.mtn || 60) * 0.75) continue;                                   // خط الأشجار
+      const f = fbm(x * 0.011 + P.ox * 1.3, z * 0.011 + P.oz * 1.3) + wetness(x, z) * 0.3;
+      if (f < thr || r() > Math.min(1, 0.15 + (f - thr) / 0.1)) continue;
+      if (slopeAt(x, z, gy) > 0.9) continue;
+      const pine = P.biome === 'pinewood' || gy > 25 ? r() < 0.8 : fbm(x * 0.02 + 3, z * 0.02) > 0.5 && P.dry < 0.6;
+      addTree(x, z, pine ? 'pine' : 'round', 0.75 + r() * 0.7);
+    }
+  };
+  forest(rndC, Math.round(300 * K), 55);
+  forest(rndF, Math.round(1500 * K), 90);
+  for (let i = 0, n = 0, lone = Math.round(40 * K); i < 6000 && n < lone; i++) {
+    const x = rndF(), z = rndF();
+    if (Math.hypot(x, z) < 40 || Math.abs(x - roadX(z)) < 6) continue;
+    addTree(x, z, r() < 0.5 ? 'round' : 'pine', 0.9 + r() * 0.6); n++;
+  }
+  if (K >= 0.4) {
+    const nOrch = (P.biome === 'orchard' ? 3 : 2);
+    for (let k = 0; k < nOrch; k++) {
+      const a = r() * 6.28, d = 70 + r() * 420, cx = Math.cos(a) * d, cz = Math.sin(a) * d, rot = r() * 3.14, cs = Math.cos(rot), sn = Math.sin(rot);
+      if (slopeAt(cx, cz, groundH(cx, cz)) > 0.15) continue;
+      for (let i = 0; i < 5; i++) for (let j = 0; j < 7; j++) { const px = (i - 2) * 7, pz = (j - 3) * 7; addTree(cx + px * cs - pz * sn, cz + px * sn + pz * cs, 'olive', 0.9 + r() * 0.2); }
+    }
+  }
+  fin(T0); fin(T1); fin(T2);
+
+  // ---- شجيرات وصخور (تُخلى حول النقاط) ----
+  const bu = reg(new THREE.IcosahedronGeometry(0.5, 1), lam(), 1000);
+  const bush = (rnd, add) => {
+    const lim = bu.n + add;
+    for (let i = 0; i < 20000 && bu.n < lim; i++) {
+      const x = rnd(), z = rnd();
+      if (Math.abs(x - roadX(z)) < 3.5 || inRiver(x, z, 0.5)) continue;
+      if (fbm(x * 0.02 + P.ox, z * 0.02 + P.oz) + wetness(x, z) * 0.3 < 0.42 && r() > 0.2) continue;
+      const sc = 0.5 + r() * 0.8, ld = localDry(x, z);
+      dummy.position.set(x, groundH(x, z) + 0.25 * sc, z); dummy.rotation.set(0, r() * 6, 0); dummy.scale.set(sc * 1.2, sc * 0.8, sc * 1.2);
+      const k = put(bu, x, z, 0.6 * sc); if (k >= 0) { c.setHSL(0.26 - ld * 0.08 + r() * 0.05, 0.45 - ld * 0.15, 0.2 + r() * 0.1); bu.mesh.setColorAt(k, c); }
+    }
+  };
+  bush(rndC, Math.round(220 * K)); bush(rndF, Math.round(500 * K));
+  fin(bu);
+  const rk = reg(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x8a8d90 }), 900);
+  const rock = (rnd, add, k) => {
+    const lim = rk.n + add;
+    for (let i = 0; i < 20000 && rk.n < lim; i++) {
+      const x = rnd(), z = rnd(), gy = groundH(x, z), sl = slopeAt(x, z, gy);
+      if (r() > 0.2 + sl * k || inRiver(x, z, 0.5)) continue;
+      const sc = 0.15 + r() * r() * (k > 9 ? 2.2 : 0.9);
+      dummy.position.set(x, gy + sc * 0.2, z); dummy.rotation.set(r() * 3, r() * 3, r() * 3); dummy.scale.set(sc, sc * 0.6, sc * 0.9); put(rk, x, z, 0.8 * sc);
+    }
+  };
+  rock(rndC, Math.round(60 + 90 * Math.min(K, 1.2)), 9); rock(rndF, Math.round(300 + 200 * Math.min(K, 1.2)), 14);
+  fin(rk);
+
+  // ---- أعشاب وأزهار قرب منطقة العمل (لا تحجب الرؤية) ----
+  const tuftG = new THREE.ConeGeometry(0.07, 0.4, 4); tuftG.translate(0, 0.2, 0);
+  const tf = plain(tuftG, lam(), 9000), nT = Math.round(5000 + 2500 * K); let nf = 0;
+  for (let i = 0; i < 30000 && nf < nT; i++) {
+    const x = rndC(), z = rndC();
+    if (Math.abs(x - roadX(z)) < 2.5 || inRiver(x, z, 0.3)) continue;
+    const sc = 0.6 + r() * 1.2, ld = localDry(x, z);
+    dummy.position.set(x, groundH(x, z), z); dummy.rotation.set(0, r() * 6, 0); dummy.scale.set(sc, sc, sc); dummy.updateMatrix();
+    tf.setMatrixAt(nf, dummy.matrix); c.setHSL(0.22 - ld * 0.06 + r() * 0.08, 0.5 - ld * 0.2, 0.25 + r() * 0.15); tf.setColorAt(nf++, c);
+  }
+  tf.count = nf; tf.instanceMatrix.needsUpdate = true; if (tf.instanceColor) tf.instanceColor.needsUpdate = true;
+  if (P.dry < 0.7 && K > 0) {
+    const fl = plain(new THREE.SphereGeometry(0.06, 5, 4), lam(), 1500), nFl = Math.round(700 * K); let nl = 0;
+    const pal = [0xffffff, 0xffd84a, 0xc58bff, 0xff7a7a];
+    for (let i = 0; i < 6000 && nl < nFl; i++) {
+      const x = rndC(), z = rndC();
+      if (Math.abs(x - roadX(z)) < 2.5 || inRiver(x, z, 0.3) || fbm(x * 0.03 + P.ox * 2, z * 0.03 + P.oz * 2) < 0.5) continue;
+      dummy.position.set(x, groundH(x, z) + 0.22, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+      fl.setMatrixAt(nl, dummy.matrix); c.setHex(pal[Math.floor(r() * 4)]); fl.setColorAt(nl++, c);
+    }
+    fl.count = nl; fl.instanceMatrix.needsUpdate = true; if (fl.instanceColor) fl.instanceColor.needsUpdate = true;
+  }
+  // ---- قصب على ضفاف النهر ----
+  if (RV) {
+    const re = reg(new THREE.ConeGeometry(0.05, 1.5, 4), lam(), 1600); re.mesh.geometry.translate(0, 0.75, 0);
+    for (let i = 0; i < 40000 && re.n < Math.round(1300 * Math.min(1, K + 0.3)); i++) {
+      const s = (r() - 0.5) * 1800, cl = rvCl(s), side = r() < 0.5 ? -1 : 1, off = rvHW(s) + 1.8 + (r() - 0.35) * 3.5;
+      const dc = rvDcl(s), tl = Math.hypot(RV.dx + RV.nx * dc, RV.dz + RV.nz * dc), tx = (RV.dx + RV.nx * dc) / tl, tz = (RV.dz + RV.nz * dc) / tl;
+      const x = s * RV.dx + cl * RV.nx - tz * side * off, z = s * RV.dz + cl * RV.nz + tx * side * off;
+      if (Math.abs(x) > WH + 150 || Math.abs(z) > WH + 150) continue;
+      const ri = riverInfo(x, z); if (ri.d < ri.hw + 1.0) continue;
+      for (let q = 0; q < 3; q++) {
+        const px = x + (r() - 0.5) * 0.8, pz = z + (r() - 0.5) * 0.8, sc = 0.6 + r() * 0.9;
+        dummy.position.set(px, groundH(px, pz), pz); dummy.rotation.set((r() - 0.5) * 0.25, r() * 6, (r() - 0.5) * 0.25); dummy.scale.set(sc, sc, sc);
+        const kk = put(re, px, pz, 0.3); if (kk >= 0) { c.setHSL(0.17 + r() * 0.06, 0.45, 0.3 + r() * 0.12); re.mesh.setColorAt(kk, c); }
+      }
+    }
+    fin(re);
+  }
+  // ---- أعمدة كهرباء بمحاذاة الطريق ----
+  const wood = new THREE.MeshLambertMaterial({ color: 0x5a4632 });
+  const pg = plain(new THREE.CylinderGeometry(0.09, 0.11, 8, 6), wood, 60), ca = plain(new THREE.BoxGeometry(2.2, 0.12, 0.12), wood, 60); let np = 0;
+  for (let z = -WH - 100; z <= WH + 100 && np < 60; z += 45) {
+    const x = roadX(z) + 4.5;
+    if (inRiver(x, z, 4) || deckAt(x, z)) continue;
+    dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.position.set(x, groundH(x, z) + 4, z); dummy.updateMatrix(); pg.setMatrixAt(np, dummy.matrix);
+    dummy.position.y += 3.6; dummy.updateMatrix(); ca.setMatrixAt(np++, dummy.matrix);
+  }
+  pg.count = ca.count = np; pg.instanceMatrix.needsUpdate = true; ca.instanceMatrix.needsUpdate = true;
+}
+
+function buildHouses() {
+  HOUSES = [];
+  const r = mulberry32(P.seed * 17 + 3), taken = [];
+  const house = (x, z) => {
+    if (inRiver(x, z, 16) || Math.hypot(x, z) < 70 || Math.abs(x - roadX(z)) < 10) return false;
+    if (taken.some(t => Math.hypot(t.x - x, t.z - z) < 16)) return false;
+    const gy = groundH(x, z), sl = Math.max(Math.abs(groundH(x + 5, z) - gy), Math.abs(groundH(x - 5, z) - gy), Math.abs(groundH(x, z + 5) - gy), Math.abs(groundH(x, z - 5) - gy)) / 5;
+    if (sl > 0.22) return false;
+    const w = 6 + r() * 5, h = 3.5 + r() * 2, g = new THREE.Group(), rot = r() * 3;
+    const wallM = new THREE.MeshLambertMaterial({ color: [0xd9c9a8, 0xe8e0d0, 0xcfc0a0, 0xe0d2b8][Math.floor(r() * 4)] });
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.8), wallM); wall.position.y = h / 2; g.add(wall);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(w * 0.78, h * 0.5, 4), new THREE.MeshLambertMaterial({ color: r() < 0.5 ? 0x9a4a32 : 0x6e5a4a })); roof.rotation.y = Math.PI / 4; roof.position.y = h + h * 0.25; roof.scale.z = 0.8; g.add(roof);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2, 0.1), new THREE.MeshLambertMaterial({ color: 0x5a3a22 })); door.position.set(0, 1, w * 0.4 + 0.02); g.add(door);
+    const found = new THREE.Mesh(new THREE.BoxGeometry(w * 1.02, 1.8, w * 0.82), new THREE.MeshLambertMaterial({ color: 0x8c8574 })); found.position.y = -0.8; g.add(found);
+    g.position.set(x, gy, z); g.rotation.y = rot; W.add(g);
+    HOUSES.push({ g, x, z, rad: w, w, d: w * 0.8, h, rot, y0: gy }); taken.push({ x, z });
+    return true;
+  };
+  const nv = 3 + Math.floor(r() * 3);
+  for (let v = 0; v < nv; v++) {
+    const a = r() * 6.283, d = 140 + r() * 400, vx = Math.cos(a) * d, vz = Math.sin(a) * d, n = 3 + Math.floor(r() * 4);
+    for (let i = 0; i < n; i++) for (let t = 0; t < 8; t++) if (house(vx + (r() - 0.5) * 80, vz + (r() - 0.5) * 80)) break;
+  }
+  for (let i = 0; i < 7; i++) for (let t = 0; t < 8; t++) { const a = r() * 6.283, d = 90 + r() * 480; if (house(Math.cos(a) * d, Math.sin(a) * d)) break; }
+}
+

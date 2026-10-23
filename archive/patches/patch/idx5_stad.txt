@@ -1,0 +1,9 @@
+<div class="stad-only">
+        <div class="tc-only"><div class="row"><label>Hz</label><input id="inHzD" type="number" inputmode="decimal" step="1" placeholder="°"><input id="inHzM" type="number" inputmode="decimal" step="0.1" placeholder="′ (0–60)"><label>V</label><input id="inVD" type="number" inputmode="decimal" step="1" placeholder="°"><input id="inVM" type="number" inputmode="decimal" step="0.1" placeholder="′ (0–60)"></div></div>
+        <div class="row"><input id="inU" type="number" inputmode="decimal" step="0.001" placeholder="ق ع (العليا)"><input id="inM" type="number" inputmode="decimal" step="0.001" placeholder="ق و (الوسطى)"><input id="inL" type="number" inputmode="decimal" step="0.001" placeholder="ق س (السفلى)"><button id="btnThRec" class="big th-only">➕ تسجيل</button></div>
+        <div class="tc-only">
+          <div class="row"><input id="inK" type="number" inputmode="decimal" step="0.001" placeholder="K"><input id="inS" type="number" inputmode="decimal" step="0.001" placeholder="S (فارغ = ق و)"><button id="btnTcRec" class="big">➕ تسجيل</button></div>
+          <div id="kHint" class="note"></div>
+        </div>
+      </div>
+      

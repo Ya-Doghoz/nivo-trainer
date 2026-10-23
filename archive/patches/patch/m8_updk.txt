@@ -1,0 +1,4 @@
+function updK() {
+  const rd = I.readings(), zen = SM.zenith(rd.v, rd.face);
+  setTxt('#kHint', `K النظري = 200·tanα = ${SM.kTheory(zen).toFixed(3)}  (α = ${(SM.elev(zen) / DEG).toFixed(3)}°).  ΔH = (ق ع − ق و)·K + J − S`);
+}

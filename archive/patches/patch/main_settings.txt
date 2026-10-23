@@ -1,0 +1,7 @@
+// ---- أخطاء الجهاز ----
+$('#cfgErr').checked = !!CFG.err; $('#cfgErrK').value = String(CFG.errK);
+const applyErr = () => { I.setErrors(CFG.err, +CFG.errK, seed); setStaffZero(I.staffZero()); };
+$('#cfgErr').onchange = e => { CFG.err = e.target.checked; saveCfg(); applyErr(); ttRefresh(); toast(CFG.err ? 'أخطاء الجهاز: تشغيل' : 'أخطاء الجهاز: إيقاف'); };
+$('#cfgErrK').onchange = e => { CFG.errK = +e.target.value; saveCfg(); applyErr(); toast('حجم الأخطاء ×' + CFG.errK); };
+$('#btnErrShow').onclick = () => { $('#errInfo').textContent = I.errReport().join('\n'); };
+

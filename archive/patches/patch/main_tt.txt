@@ -1,0 +1,216 @@
+// ================= دفتر التيودوليت والتاكيومتر =================
+// NIVO-V4 — تيودوليت رقمي + تاكيومتر يدوي (بصري) + تاكيومتر آلي
+const SEC = DEG / 3600;
+const ttRoot = $('#tt');
+const isStad = () => I.type === 'theo' || I.type === 'tach';
+const kindRows = () => rowsT.map((r, i) => [r, i]).filter(([r]) => r.k === I.type);
+
+function ttCalc(r) {
+  const su = setupById(r.su), p = ptById(r.pt), o = {};
+  if (!su || !p) return o;
+  const zen = r.face === 2 ? TAU - r.v : r.v, Zs = zOf(su);
+  o.Dt = Math.hypot(p.x - su.x, p.z - su.z); o.Zt = zOf(p);
+  if (r.k !== 'ts') {
+    if (r.u != null && r.l != null) {
+      const s = r.u - r.l, a = Math.PI / 2 - zen, m = r.m != null ? r.m : (r.u + r.l) / 2;
+      o.s = s; o.D = 100 * s * Math.cos(a) ** 2; o.Z = Zs + (r.i ?? 0) + 50 * s * Math.sin(2 * a) - m;
+      o.eD = (o.D - o.Dt) * 100; o.eZ = (o.Z - o.Zt) * 1000;
+    }
+  } else if (r.sd != null) {
+    const az = r.face === 2 ? r.hz - Math.PI : r.hz, c0 = crd(su.x, su.z), ct = crd(p.x, p.z);
+    o.HD = r.sd * Math.sin(zen); o.VD = r.sd * Math.cos(zen);
+    o.N = c0.N + o.HD * Math.cos(az); o.E = c0.E + o.HD * Math.sin(az); o.Z = Zs + (r.i ?? 0) + o.VD - (r.hr ?? 0);
+    o.eN = (o.N - ct.N) * 1000; o.eE = (o.E - ct.E) * 1000; o.eZ = (o.Z - o.Zt) * 1000;
+  }
+  return o;
+}
+
+function ttRender() {
+  const th = isStad(), exam = CFG.exam;
+  const opts = pt => ['<option value=""></option>'].concat(job.points.map(p => `<option value="${p.id}"${p.id === pt ? ' selected' : ''}>${p.id}</option>`)).concat(pt && !ptById(pt) ? [`<option value="${pt}" selected>${pt}</option>`] : []).join('');
+  const cols = th ? ['#', 'النقطة', 'Hz', 'V', 'وجه', 'U', 'M', 'L', 'D م', 'Z م'].concat(exam ? [] : ['±D سم', '±Z مم'])
+    : ['#', 'النقطة', 'Hz', 'V', 'وجه', 'SD', 'hr', 'HD', 'VD', 'N', 'E', 'Z'].concat(exam ? [] : ['±N مم', '±E مم', '±Z مم']);
+  let h = '<thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+  kindRows().forEach(([r, i]) => {
+    const inp = (f, v) => `<input type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="${f}" value="${v ?? ''}">`;
+    const c = k => `<td class="calc" data-c="${k}${i}"></td>`;
+    h += `<tr><td>${i + 1}</td><td><select data-r="${i}" data-f="pt">${opts(r.pt)}</select></td><td class="calc">${dms(r.hz)}</td><td class="calc">${dms(r.v)}</td><td>${r.face === 1 ? 'I' : 'II'}</td>`;
+    if (th) h += `<td>${inp('u', r.u)}</td><td>${inp('m', r.m)}</td><td>${inp('l', r.l)}</td>${c('D')}${c('Z')}` + (exam ? '' : c('eD') + c('eZ'));
+    else h += `<td class="calc">${(r.sd ?? 0).toFixed(3)}</td><td>${inp('hr', r.hr)}</td>${c('HD')}${c('VD')}${c('N')}${c('E')}${c('Z')}` + (exam ? '' : c('eN') + c('eE') + c('eZ'));
+    h += '</tr>';
+  });
+  ttRoot.innerHTML = h + '</tbody>';
+  ttRefresh();
+}
+
+function ttRefresh() {
+  const set = (k, i, v, d, color) => {
+    const el = ttRoot.querySelector(`[data-c="${k}${i}"]`); if (!el) return;
+    el.textContent = v == null || Number.isNaN(v) ? '' : v.toFixed(d); if (color !== undefined) el.style.color = color;
+  };
+  const col = (e, lim) => (e == null ? '' : Math.abs(e) <= lim ? '#7ee787' : '#ff7b72');
+  kindRows().forEach(([r, i]) => {
+    const o = ttCalc(r);
+    if (isStad()) { set('D', i, o.D, 2); set('Z', i, o.Z, 3); set('eD', i, o.eD, 1, col(o.eD, 10)); set('eZ', i, o.eZ, 0, col(o.eZ, 15)); }
+    else { set('HD', i, o.HD, 3); set('VD', i, o.VD, 3); set('N', i, o.N, 3); set('E', i, o.E, 3); set('Z', i, o.Z, 3); set('eN', i, o.eN, 0, col(o.eN, 15)); set('eE', i, o.eE, 0, col(o.eE, 15)); set('eZ', i, o.eZ, 0, col(o.eZ, 15)); }
+  });
+  $('#ttSum').textContent = ttSummary(false).join('\n');
+}
+
+function ttSummary(reveal) {
+  const rr = rowsT.filter(r => r.k === I.type), lines = [], show = reveal || !CFG.exam;
+  if (!rr.length) return ['لا توجد قياسات بعد. ' + (I.type === 'ts' ? 'وجّه الشعيرة إلى المنشور واضغط 📏 قياس وحفظ.' : 'اقرأ U/M/L واضغط ➕ تسجيل.')];
+  lines.push('عدد القياسات: ' + rr.length);
+  if (isStad() && rr.length >= 2) {
+    const a = rr[rr.length - 2], b = rr[rr.length - 1], su = setupById(a.su), pa = ptById(a.pt), pb = ptById(b.pt);
+    if (a.su === b.su && su && pa && pb && a.pt !== b.pt && a.face === b.face) {
+      const ang = (((b.hz - a.hz) % TAU) + TAU) % TAU, bt = p => Math.atan2(p.x - su.x, -(p.z - su.z)), trAng = (((bt(pb) - bt(pa)) % TAU) + TAU) % TAU;
+      lines.push(`الزاوية الأفقية ${a.pt}→${b.pt} = ${dms(ang, 1)}` + (show ? ` | الحقيقية ${dms(trAng, 1)} | الخطأ ${(wrapPi(ang - trAng) / SEC).toFixed(0)}″` : ''));
+    }
+  }
+  // قياسات بالوجهين على نفس النقطة: متوسط Hz وتقدير i وc
+  const by = {};
+  rr.forEach(r => { const k = r.su + '|' + r.pt; (by[k] = by[k] || {})[r.face] = r; });
+  Object.values(by).forEach(g => {
+    if (!g[1] || !g[2]) return;
+    const a = g[1], b = g[2], ie = (a.v + b.v - TAU) / 2, hzd = wrapPi(b.hz - a.hz - Math.PI);
+    const zz = Math.min(Math.max(a.v, 0.2), Math.PI - 0.2), c2 = hzd * Math.sin(zz) / 2, mh = a.hz + wrapPi(b.hz - Math.PI - a.hz) / 2;
+    let s = `${a.pt} (الوجهان): Hz متوسط = ${dms(mh, 1)} | i المقدّر = ${(wrapPi(ie) / SEC).toFixed(0)}″ | |c| المقدّر = ${(Math.abs(c2) / SEC).toFixed(0)}″`;
+    if (show && I.ERR.on) s += ` | الحقيقي: i = ${I.errArc('i').toFixed(0)}″، |c| = ${Math.abs(I.errArc('c')).toFixed(0)}″` + (I.type === 'tach' ? ' (i يشمل برغي الفهرس)' : '');
+    lines.push(s);
+  });
+  if (show) {
+    const es = [];
+    rr.forEach(r => { const o = ttCalc(r); if (isStad()) { if (o.eZ != null) es.push(Math.abs(o.eZ)); } else if (o.eN != null) es.push(Math.max(Math.abs(o.eN), Math.abs(o.eE), Math.abs(o.eZ))); });
+    if (es.length) lines.push(`أكبر خطأ = ${Math.max(...es).toFixed(0)} مم`);
+  }
+  return lines;
+}
+
+['input', 'change'].forEach(ev => ttRoot.addEventListener(ev, e => {
+  const t = e.target, i = +t.dataset.r, f = t.dataset.f;
+  if (isNaN(i) || !f || !rowsT[i]) return;
+  if (f === 'pt') rowsT[i].pt = t.value; else rowsT[i][f] = numOrNull(t.value);
+  ttRefresh(); saveState();
+}));
+$('#btnTtDel').onclick = () => { const idx = rowsT.map(r => r.k).lastIndexOf(I.type); if (idx >= 0) rowsT.splice(idx, 1); ttRender(); saveState(); };
+$('#btnTtClear').onclick = () => { if (confirm('مسح كل قياسات هذا الجهاز؟')) { rowsT = rowsT.filter(r => r.k !== I.type); ttRender(); saveState(); } };
+$('#btnTtEval').onclick = () => { $('#ttSum').textContent = ttSummary(true).join('\n'); };
+$('#btnTtCsv').onclick = async () => {
+  const th = isStad(), lines = [th ? 'Point,Hz,V,Face,U,M,L,D,Z' : 'Point,Hz,V,Face,SD,hr,HD,VD,N,E,Z'];
+  kindRows().forEach(([r]) => {
+    const o = ttCalc(r), base = [r.pt, dms(r.hz, 1), dms(r.v, 1), r.face === 1 ? 'I' : 'II'];
+    lines.push(base.concat(th ? [f3(r.u), f3(r.m), f3(r.l), f3(o.D), f3(o.Z)] : [f3(r.sd), f3(r.hr), f3(o.HD), f3(o.VD), f3(o.N), f3(o.E), f3(o.Z)]).join(','));
+  });
+  const t = lines.join('\n');
+  try { await navigator.clipboard.writeText(t); toast('نُسخ الجدول (CSV)'); }
+  catch (e) { const b = $('#ttCsvBox'); b.style.display = 'block'; b.value = t; b.select(); toast('انسخ النص من الخانة'); }
+};
+
+function afterTTRecord(r, msg, cls) {
+  flags.read = true;
+  if (r.face === 2) flags.face2 = true;
+  flags.two = new Set(rowsT.filter(q => q.k === I.type).map(q => q.pt)).size >= 2;
+  stepKey = ''; say(msg, cls); ttRender(); saveState();
+}
+const curSetupId = () => (job.setups[job.cur] || {}).id;
+
+// ---- تيودوليت رقمي: Hz وV تُسجَّل تلقائياً ----
+$('#btnThRec').onclick = () => {
+  const u = numOrNull($('#inU').value), m = numOrNull($('#inM').value), l = numOrNull($('#inL').value), i = numOrNull($('#inHI').value);
+  if (!I.st.mounted || !holder.station || holder.walking || !S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (u === null || l === null || u <= l) return say('اكتب قراءة الشعيرة العليا U (الأكبر) والسفلى L', 'warn');
+  if (i === null) return say('قِس ارتفاع الجهاز i أولاً (📏)', 'warn');
+  const rd = I.readings();
+  const r = { k: 'theo', pt: holder.station.id, su: curSetupId(), hz: rd.hz, v: rd.v, face: rd.face, u, m, l, i, tr: { u: S.U, m: S.reading, l: S.L } };
+  rowsT.push(r);
+  let msg = `✓ سُجّل: Hz ${dms(rd.hz)} V ${dms(rd.v)} (وجه ${rd.face === 1 ? 'I' : 'II'})`, cls = 'ok';
+  if (!CFG.exam && S.U != null) { const e = Math.max(Math.abs(u - S.U), Math.abs(l - S.L)) * 1000; msg += ` | فارق قراءة الشعيرات ${e.toFixed(0)} مم`; cls = e <= 5 ? 'ok' : e <= 15 ? 'warn' : 'bad'; }
+  if (I.getTilt().arc > 3) { msg += ' | ⚠ الجهاز غير مسوّى جيداً'; if (cls === 'ok') cls = 'warn'; }
+  $('#inU').value = $('#inM').value = $('#inL').value = '';
+  afterTTRecord(r, msg, cls);
+};
+
+// ---- تاكيومتر يدوي: تقرأ أنت Hz وV من نافذة الميكروسكوب ----
+$('#btnTcRec').onclick = () => {
+  const u = numOrNull($('#inU').value), m = numOrNull($('#inM').value), l = numOrNull($('#inL').value), i = numOrNull($('#inHI').value);
+  const hD = numOrNull($('#inHzD').value), hM = numOrNull($('#inHzM').value), vD = numOrNull($('#inVD').value), vM = numOrNull($('#inVM').value);
+  if (!I.st.mounted || !holder.station || holder.walking || !S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (hD === null || vD === null) return say('اكتب قراءتي Hz وV (درجات ودقائق) من نافذة القراءة', 'warn');
+  if (u === null || l === null || u <= l) return say('اكتب قراءة الشعيرة العليا U (الأكبر) والسفلى L', 'warn');
+  if (i === null) return say('قِس ارتفاع الجهاز i أولاً (📏)', 'warn');
+  const hz = (((hD + (hM || 0) / 60) % 360 + 360) % 360) * DEG, v = (((vD + (vM || 0) / 60) % 360 + 360) % 360) * DEG, rd = I.readings();
+  const r = { k: 'tach', pt: holder.station.id, su: curSetupId(), hz, v, face: rd.face, u, m, l, i, tr: { u: S.U, m: S.reading, l: S.L, hz: rd.hz, v: rd.v } };
+  rowsT.push(r);
+  let msg = `✓ سُجّل: Hz ${dms(hz, 1)} V ${dms(v, 1)} (وجه ${rd.face === 1 ? 'I' : 'II'})`, cls = 'ok';
+  if (!CFG.exam) {
+    const eh = Math.abs(wrapPi(hz - rd.hz)) / SEC, ev2 = Math.abs(wrapPi(v - rd.v)) / SEC, es = S.U != null ? Math.max(Math.abs(u - S.U), Math.abs(l - S.L)) * 1000 : 0;
+    msg += ` | فارق قراءتك: Hz ${eh.toFixed(0)}″ و V ${ev2.toFixed(0)}″ والشعيرات ${es.toFixed(0)} مم`;
+    cls = Math.max(eh, ev2) <= 90 && es <= 5 ? 'ok' : Math.max(eh, ev2) <= 240 && es <= 15 ? 'warn' : 'bad';
+  }
+  if (Math.abs(I.indexBubble()) > 0.5) { msg += ' | ⚠ كمانة الدائرة الرأسية غير مركزية'; if (cls === 'ok') cls = 'warn'; }
+  if (I.getTilt().arc > 3) { msg += ' | ⚠ الجهاز غير مسوّى جيداً'; if (cls === 'ok') cls = 'warn'; }
+  $('#inU').value = $('#inM').value = $('#inL').value = '';
+  afterTTRecord(r, msg, cls);
+};
+
+// ---- تاكيومتر آلي: EDM ----
+$('#btnMeasTS').onclick = () => {
+  if (!I.st.mounted || holder.walking || !holder.station) return say('أرسل المنشور وانتظر وصوله', 'warn');
+  if (!S.hit || !S.edm) return say('الشعيرة ليست على منتصف المنشور — وجّه بدقة (EDM لا يعيد إشارة).', 'warn');
+  const i = numOrNull($('#inHI').value), hr = numOrNull($('#inHr').value);
+  if (i === null) return say('قِس ارتفاع الجهاز i أولاً (📏)', 'warn');
+  if (hr === null) return say('اكتب ارتفاع العاكس hr', 'warn');
+  const rd = I.readings(), ee = I.edmErr();
+  const sdv = Math.round((S.sd * (1 + ee.ppm * 1e-6) + ee.zero + (Math.random() - 0.5) * 2 * (0.002 + 2e-6 * S.sd)) * 1000) / 1000;
+  const r = { k: 'ts', pt: holder.station.id, su: curSetupId(), hz: rd.hz, v: rd.v, face: rd.face, sd: sdv, hr, i, comp: rd.comp };
+  rowsT.push(r);
+  const o = ttCalc(r);
+  lastMeas = `SD ${sdv.toFixed(3)}  HD ${o.HD.toFixed(3)}  VD ${o.VD >= 0 ? '+' : ''}${o.VD.toFixed(3)}`;
+  let msg = `✓ ${r.pt}: ${lastMeas}`, cls = 'ok';
+  if (!flags.orient) { msg += ' | ⚠ الاتجاه غير مضبوط: الإحداثيات مدوّرة'; cls = 'warn'; }
+  if (!rd.comp) { msg += ' | ⚠ الميل خارج مدى المعوّض'; cls = 'bad'; }
+  afterTTRecord(r, msg, cls);
+};
+$('#btnOrient').onclick = () => {
+  if (!I.st.mounted) return say('ركّب الجهاز أولاً', 'warn');
+  const bs = ptById($('#bsSel').value), s0 = job.setups[job.cur];
+  if (!bs || !s0) return say('اختر نقطة BS معلومة (BM)', 'warn');
+  if (!holder.station || holder.station.id !== bs.id) return say('أرسل المنشور إلى ' + bs.id + ' أولاً', 'warn');
+  if (!S.hit || !S.edm) return say('وجّه الشعيرة إلى منتصف المنشور أولاً', 'warn');
+  const az = Math.atan2(bs.x - s0.x, -(bs.z - s0.z)), face2 = I.st.vz > Math.PI;
+  I.st.hz0 = I.st.heading - (az + (face2 ? Math.PI : 0)); flags.orient = true; stepKey = '';
+  say(`✓ ضُبط الاتجاه: Hz = ${dms(az, 1)} (سمت ${s0.id}→${bs.id})`, 'ok');
+};
+
+// ---- نافذة قراءة الدوائر (ميكروسكوب بمقياس دقائق) وكمانة الفهرس ----
+const rw = $('#rdwin'), rwc = rw.getContext('2d'), ix = $('#idxv'), ixc = ix.getContext('2d');
+(function () { const d = Math.min(devicePixelRatio || 1, 2); rw.width = 340 * d; rw.height = 124 * d; rwc.setTransform(d, 0, 0, d, 0, 0); ix.width = 340 * d; ix.height = 56 * d; ixc.setTransform(d, 0, 0, d, 0, 0); })();
+function drawStrip(c, y, label, ang) {
+  const x0 = 34, w = 296, deg = ang / DEG, d = Math.floor(deg), m = (deg - d) * 60;
+  c.fillStyle = '#e8e4cf'; c.fillRect(x0, y, w, 46);
+  c.strokeStyle = '#222'; c.lineWidth = 1; c.fillStyle = '#222'; c.font = '9px sans-serif'; c.textAlign = 'center';
+  for (let k = 0; k <= 60; k++) {
+    const x = x0 + k * w / 60, h = k % 10 === 0 ? 12 : k % 5 === 0 ? 9 : 6;
+    c.beginPath(); c.moveTo(x, y + 46); c.lineTo(x, y + 46 - h); c.stroke();
+    if (k % 10 === 0) c.fillText(String(k), x, y + 30);
+  }
+  const xl = x0 + m * w / 60;
+  c.strokeStyle = '#c1121f'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(xl, y + 2); c.lineTo(xl, y + 42); c.stroke();
+  c.fillStyle = '#c1121f'; c.font = 'bold 13px sans-serif'; c.textAlign = 'center'; c.fillText(d + '°', clamp(xl, x0 + 16, x0 + w - 16), y + 15);
+  c.fillStyle = '#fff'; c.font = '12px sans-serif'; c.textAlign = 'left'; c.fillText(label, 6, y + 28);
+}
+function drawReadWin() {
+  const rd = I.readings();
+  rwc.fillStyle = '#161616'; rwc.fillRect(0, 0, 340, 124);
+  drawStrip(rwc, 6, 'Hz', rd.hz); drawStrip(rwc, 68, 'V', rd.v);
+}
+function drawIdx() {
+  const c = ixc, b = I.indexBubble(), k = 23;
+  c.clearRect(0, 0, 340, 56); c.fillStyle = '#0d2a22'; c.fillRect(30, 12, 280, 32); c.strokeStyle = '#5fd6b0'; c.lineWidth = 2; c.strokeRect(30, 12, 280, 32);
+  for (let t = -6; t <= 6; t++) { c.strokeStyle = 'rgba(255,255,255,.25)'; c.lineWidth = 1; c.beginPath(); c.moveTo(170 + t * k, 12); c.lineTo(170 + t * k, 20); c.stroke(); }
+  c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.moveTo(170 - 0.5 * k, 12); c.lineTo(170 - 0.5 * k, 44); c.moveTo(170 + 0.5 * k, 12); c.lineTo(170 + 0.5 * k, 44); c.stroke();
+  c.fillStyle = 'rgba(190,255,225,.9)'; c.beginPath(); c.ellipse(clamp(170 + b * k, 56, 284), 28, 26, 12, 0, 0, 7); c.fill();
+}
+$$('[data-ix]').forEach(b => (b.onclick = () => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); I.nudgeIdx(+b.dataset.ix); }));
+

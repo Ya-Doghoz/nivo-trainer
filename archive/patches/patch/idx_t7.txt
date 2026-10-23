@@ -1,0 +1,9 @@
+<section id="t7">
+      <div class="row"><button id="btnTtDel">🗑 آخر صف</button><button id="btnTtClear">🧹 مسح الكل</button><button id="btnTtEval" class="big">📊 تقييم</button><button id="btnTtCsv">📋 CSV</button></div>
+      <div id="ttWrap"><table id="tt"></table></div>
+      <div id="ttSum" class="note"></div>
+      <textarea id="ttCsvBox" style="display:none;width:100%;height:90px;margin-top:6px;background:#111823;color:#fff;border:1px solid #3a4a62;border-radius:8px"></textarea>
+      <p class="note stad-only">التاكيومتري بالستاديا: s = U − L، α = 90° − Z، D = 100·s·cos²α، ΔZ = i + 50·s·sin2α − M، Z = Zs + ΔZ. قارن زاويتين أفقيتين بين نقطتين مع 0SET على المرجع، وكرّر القياس بالوجهين لتقدير خطأ الفهرس وانحراف خط النظر.</p>
+      <p class="note ts-only">التاكيومتر الآلي: HD = SD·sinZ، VD = SD·cosZ، N = Ns + HD·cosAz، E = Es + HD·sinAz، Z = Zs + i + VD − hr. اضبط الاتجاه أولاً على BS معلوم.</p>
+    </section>
+    

@@ -1,0 +1,131 @@
+// ================= التيودوليت والتاكيومترات =================
+// NIVO-V5 — نماذج أكثر واقعية + انعكاسات معدنية + دعم نماذج Blender المخصّصة
+export const custom = {};
+const ttTel = {}, plateBubs = {};
+let idxBub = null;
+const tm = (c, r, m) => { const x = std(c, r, m); x.envMapIntensity = 0.9; return x; };
+const MT = {
+  dark: tm(0x26282c, 0.55, 0.2), silver: tm(0xd2d6db, 0.25, 0.85), steel: tm(0x9aa1a9, 0.3, 0.8), rubber: tm(0x121212, 0.9, 0),
+  thBody: tm(0xcfd6de, 0.38, 0.35), thAcc: tm(0x2f6fed, 0.35, 0.3),
+  tcBody: tm(0x56695a, 0.45, 0.3), tcAcc: tm(0xc9a45f, 0.3, 0.8),
+  tsBody: tm(0xf1f3f6, 0.35, 0.2), tsAcc: tm(0xff7a00, 0.4, 0.2)
+};
+MT.darkD = MT.dark.clone(); MT.darkD.side = THREE.DoubleSide;
+import('/three/examples/jsm/environments/RoomEnvironment.js').then(mod => {
+  const env = new THREE.PMREMGenerator(renderer).fromScene(new mod.RoomEnvironment(renderer), 0.04).texture;
+  Object.values(MT).forEach(x => { x.envMap = env; x.needsUpdate = true; });
+}).catch(() => { /* بدون انعكاسات */ });
+
+// مقبض مسنّن (knurled)
+function knurl(r, h, n, mat) {
+  const g = new THREE.Group(); g.add(new THREE.Mesh(cyl(r - 0.0008, h, 24), mat));
+  for (let i = 0; i < n; i++) { const a = i / n * TAU, b = mesh(box(0.0016, h, 0.0022), mat, Math.cos(a) * r, 0, Math.sin(a) * r); b.rotation.y = -a; g.add(b); }
+  return g;
+}
+// دعامتان على شكل حرف U مدرّجتان بحواف منحنية
+function uBracket(a1, H, gap, yb, D, mat) {
+  const s = new THREE.Shape(), a0 = a1 + 0.008, g = gap / 2, r = 0.01;
+  s.moveTo(-a0, 0); s.lineTo(a0, 0); s.lineTo(a1, H - r); s.quadraticCurveTo(a1 - 0.002, H, a1 - r - 0.002, H);
+  s.lineTo(g + r, H); s.quadraticCurveTo(g, H, g, H - r); s.lineTo(g, yb); s.lineTo(-g, yb); s.lineTo(-g, H - r);
+  s.quadraticCurveTo(-g, H, -g - r, H); s.lineTo(-a1 + r + 0.002, H); s.quadraticCurveTo(-a1 + 0.002, H, -a1, H - r); s.lineTo(-a0, 0);
+  const geo = new THREE.ExtrudeGeometry(s, { depth: D, bevelEnabled: true, bevelThickness: 0.003, bevelSize: 0.003, bevelSegments: 2, curveSegments: 6 });
+  geo.translate(0, 0, -D / 2);
+  return new THREE.Mesh(geo, mat);
+}
+function screenTex(ts) {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 192;
+  const x = c.getContext('2d');
+  x.fillStyle = '#1b1f26'; x.fillRect(0, 0, 128, 192);
+  x.fillStyle = '#8fe3a0'; x.fillRect(8, 8, 112, 72);
+  x.fillStyle = '#12301c'; x.font = 'bold 14px monospace';
+  x.fillText('Hz 0°00′00″', 14, 30); x.fillText('V  90°00′00″', 14, 50); if (ts) x.fillText('SD ---.---', 14, 70);
+  x.fillStyle = '#9aa4b4';
+  for (let r = 0; r < 4; r++) for (let q = 0; q < 3; q++) x.fillRect(12 + q * 38, 94 + r * 22, 30, 15);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+function buildTT(kind) {
+  const ts = kind === 'ts', tc = kind === 'tach';
+  const body = ts ? MT.tsBody : tc ? MT.tcBody : MT.thBody, acc = ts ? MT.tsAcc : tc ? MT.tcAcc : MT.thAcc;
+  tag = kind;
+  // القاعدة الدوّارة: قرص + حلقة مسننة للحركة السفلية + دعامتا U
+  const al = new THREE.Group();
+  al.add(new THREE.Mesh(cyl(0.064, 0.05, 40, 0.072), body), mesh(cyl(0.075, 0.006, 40), acc, 0, -0.018, 0));
+  const kr = knurl(0.0745, 0.014, 40, MT.dark); kr.position.y = -0.03; al.add(kr);
+  const br = uBracket(ts ? 0.096 : 0.092, 0.161, 0.116, 0.05, ts ? 0.1 : 0.085, body); br.position.set(0, 0.025, 0); al.add(br);
+  const lc = mesh(cyl(0.034, 0.012, 32), body, -0.1, 0.141, 0); lc.rotation.z = Math.PI / 2;
+  const lp = mesh(cyl(0.013, 0.014, 16), acc, -0.109, 0.141, 0); lp.rotation.z = Math.PI / 2;
+  al.add(lc, lp);
+  for (const sx of [-1, 1]) al.add(mesh(box(0.004, 0.08, 0.05), acc, sx * 0.0995, 0.07, 0));
+  addPart(kind + 'al', 'القاعدة الدوّارة والدعامتان', 'تدور حول المحور الرأسي فوق الدائرة الأفقية، وتحمل الدعامتين اللتين يدور بينهما المنظار حول المحور الأفقي (trunnion). الحلقة المسننة السفلية للحركة الأفقية السفلى.', al, rotating, new V3(0, 0.049, 0), new V3(0, 0.54, 0));
+
+  if (ts) {
+    const hd = new THREE.Group();
+    [-0.028, 0.028].forEach(z => { const arc = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.008, 8, 28, Math.PI), body); arc.position.z = z; hd.add(arc); });
+    hd.add(mesh(box(0.06, 0.016, 0.07), body, 0, 0.072, 0));
+    addPart('tshd', 'مقبض الحمل', 'لحمل الجهاز. لا تحمله من المنظار أبداً.', hd, al, new V3(0, 0.186, 0), new V3(0, 0.2, 0));
+    const bt = new THREE.Group(); bt.add(mesh(box(0.03, 0.08, 0.07), MT.dark), mesh(box(0.004, 0.05, 0.05), acc, 0.016, 0, 0));
+    addPart('tsbat', 'البطارية', 'حزمة بطارية قابلة للشحن تُركَّب على الدعامة اليمنى. أطفئ الجهاز قبل نزعها.', bt, al, new V3(0.118, 0.05, 0), new V3(0.18, 0, 0));
+  }
+  if (!ts) {
+    const pb = new THREE.Group(), tube = mesh(cyl(0.008, 0.052, 12), M.glass); tube.rotation.z = Math.PI / 2;
+    const bb = mesh(new THREE.SphereGeometry(0.0042, 10, 8), M.bub); bb.scale.x = 2.4; plateBubs[kind] = bb;
+    pb.add(mesh(box(0.06, 0.008, 0.02), MT.dark, 0, -0.008, 0), tube, bb);
+    addPart(kind + 'bub', 'كمانة الصفيحة (الأنبوبية)', 'حساسيتها نحو 40″ للتدريجة وموازية للمحور الأفقي. تُسوّى بتوجيهها موازية لبرغيَّين ثم تدوير الجهاز 90° وضبط البرغي الثالث، وتُعاد حتى تبقى في المركز عند أي اتجاه.', pb, al, new V3(0, 0.083, -0.015), new V3(0, 0.12, -0.1));
+  }
+  if (!tc) {
+    const dp = new THREE.Group(), scr = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.075), new THREE.MeshBasicMaterial({ map: screenTex(ts) }));
+    scr.rotation.y = -Math.PI / 2; scr.position.x = -0.0045;
+    dp.add(mesh(box(0.008, 0.085, 0.058), MT.dark), scr);
+    addPart(kind + 'dp', ts ? 'الشاشة ولوحة المفاتيح' : 'الشاشة الرقمية', ts ? 'تعرض Hz وV وSD وميلان المحور، وتسجّل القياسات وتحسب الإحداثيات.' : 'تعرض Hz وV بدقة 5″ مع مفتاح 0SET لتصفير الزاوية الأفقية.', dp, al, new V3(-0.115, 0.1, 0), new V3(-0.16, 0, 0));
+  }
+  if (tc) {
+    // كمانة الدائرة الرأسية (الفهرس) + برغي الفهرس
+    const iv = new THREE.Group(), tb = mesh(cyl(0.007, 0.06, 12), M.glass); tb.rotation.x = Math.PI / 2;
+    idxBub = mesh(new THREE.SphereGeometry(0.0038, 10, 8), M.bub); idxBub.scale.z = 2.4;
+    const kn = knurl(0.012, 0.02, 16, MT.dark); kn.rotation.z = Math.PI / 2; kn.position.z = 0.05;
+    iv.add(mesh(box(0.012, 0.016, 0.07), MT.dark, 0, -0.01, 0), tb, idxBub, kn);
+    addPart('tcidx', 'كمانة الدائرة الرأسية وبرغي الفهرس', 'كمانة الفهرس: يجب تمركزها ببرغي الفهرس قبل كل قراءة رأسية، فهي التي تحدّد صفر الدائرة الرأسية. خطؤها يدخل مباشرة في زاوية V.', iv, al, new V3(0.113, 0.06, -0.005), new V3(0.17, 0.05, 0));
+    // ميكروسكوب القراءة
+    const mic = new THREE.Group(), mt = rz(mesh(cyl(0.011, 0.09, 14), MT.dark)); mt.rotation.x = Math.PI / 2 - 0.5;
+    mic.add(mt, mesh(cyl(0.015, 0.012, 14), MT.rubber, 0, 0.0216, 0.0396));
+    addPart('tcmic', 'ميكروسكوب قراءة الدوائر', 'ينظر منه المراقب إلى الدائرتين الأفقية والرأسية فيرى تدريج الدرجات ومقياس الدقائق ويقرأ يدوياً.', mic, al, new V3(-0.1, 0.12, 0.05), new V3(-0.16, 0.1, 0.1));
+    // مرآة الإضاءة
+    const mi = new THREE.Group(), md = mesh(cyl(0.024, 0.004, 20), M.mirror); md.rotation.x = 0.8; mi.add(md, mesh(cyl(0.004, 0.05, 8), MT.steel, 0, -0.025, 0));
+    addPart('tcmir', 'مرآة الإضاءة', 'تعكس ضوء النهار إلى داخل الجهاز لإضاءة تدريج الدوائر قبل القراءة.', mi, al, new V3(0.085, 0.035, 0.07), new V3(0.16, -0.05, 0.1));
+  }
+  const tg = new THREE.Group();
+  [[-0.005, 0.035, acc], [-0.005, -0.03, MT.dark], [0.035, 0.035, MT.dark], [0.035, -0.03, acc]].forEach(([y, z, mm]) => { const k = knurl(0.012, 0.018, 16, mm); k.rotation.z = Math.PI / 2; k.position.set(0.112, y, z); tg.add(k); });
+  addPart(kind + 'tg', 'مثبّتات وبراغي الحركة البطيئة', 'مثبّت وبرغي حركة بطيئة للأفقي ومثلهما للرأسي: اربط المثبّت أولاً ثم دقّق التوجيه بالبرغي.', tg, al, new V3(0, 0, 0), new V3(0.16, 0, 0));
+  const pl = new THREE.Group(); pl.add(mesh(cyl(0.012, 0.045, 12), MT.dark), mesh(cyl(0.006, 0.02, 8), ts ? M.red : MT.silver, 0, -0.03, 0));
+  addPart(kind + 'pl', ts ? 'الشاقول الليزري' : 'الشاقول البصري', ts ? 'يسقط نقطة ليزر على العلامة الأرضية لمركزة الجهاز فوقها.' : 'ينظر منه المراقب إلى العلامة الأرضية لمركزة الجهاز فوقها.', pl, al, new V3(0, -0.012, 0.06), new V3(0, -0.12, 0.1));
+
+  // المنظار على المحور الأفقي (يدور رأسياً)
+  const tel = new THREE.Group(); ttTel[kind] = tel;
+  const tr = ts ? 0.034 : 0.03, ax = mesh(cyl(0.008, 0.2, 10), MT.steel); ax.rotation.z = Math.PI / 2;
+  tel.add(rz(mesh(cyl(tr, 0.17, 28), body)), ax, rz(mesh(cyl(tr + 0.004, 0.012, 28), acc)));
+  addPart(kind + 'tel', 'المنظار', ts ? 'يدور رأسياً (الوجه I والوجه II) ويشترك مع EDM في المحور البصري. الشعيرات للتوجيه، والتكبير نحو 30×.' : tc ? 'منظار ذاتي الاختزال: الشبكة فيها شعيرة رأسية وثلاث شعيرات أفقية (ق ع وق و وق س) وخط مائل. المسافة الأفقية D = (ق ع − ق س)×100 بلا حاجة لـ cos²α.' : 'يدور رأسياً (الوجه I والوجه II). فيه شعيرة رأسية وأفقية وشعيرتا ستاديا: D = 100·s·cos²α و V = 50·s·sin2α.', tel, rotating, new V3(0, 0.19, 0), new V3(0, 0.8, 0));
+  const ob = new THREE.Group();
+  ob.add(rz(mesh(cyl(tr, 0.06, 28, tr + 0.012), MT.dark)), rz(mesh(new THREE.CylinderGeometry(tr + 0.014, tr + 0.014, 0.04, 28, 1, true), MT.darkD, 0, 0, -0.045)));
+  const og2 = mesh(new THREE.CircleGeometry(tr + 0.008, 28), M.lens, 0, 0, -0.0305); og2.rotation.y = Math.PI; ob.add(og2);
+  addPart(kind + 'ob', 'العدسة الشيئية', 'مخروطية تجمع الضوء من الهدف وتكوّن صورته في مستوى الشعيرات. الظلّة الأمامية تحميها من الوهج.', ob, tel, new V3(0, 0, -0.115), new V3(0, 0, -0.22));
+  const ey = new THREE.Group(); ey.add(rz(mesh(cyl(0.016, 0.07, 20, 0.024), MT.dark)), rz(mesh(cyl(0.027, 0.016, 20), MT.rubber, 0, 0, 0.038)));
+  addPart(kind + 'ey', 'العدسة العينية', 'تكبّر الصورة والشعيرات؛ تُضبط أولاً حتى تصبح الشعيرات حادّة. غطاؤها المطاطي يريح العين.', ey, tel, new V3(0, 0, 0.13), new V3(0, 0, 0.22));
+  const fr = new THREE.Group(), fk2 = knurl(0.022, 0.016, 26, MT.dark); fk2.rotation.z = Math.PI / 2; fk2.position.x = 0.042;
+  fr.add(fk2, rz(mesh(cyl(tr + 0.006, 0.02, 28), acc)));
+  addPart(kind + 'fr', 'برغي التبئير', 'يُدار حتى تتضح صورة الهدف على مستوى الشعيرات (بلا بارالاكس).', fr, tel, new V3(0, 0, -0.035), new V3(0, 0.14, 0));
+  const vc = new THREE.Group(), vd = new THREE.Mesh(tc ? cyl(0.05, 0.008, 44) : cyl(0.045, 0.008, 32), tc ? [circleMat(), MT.silver, MT.silver] : body);
+  vd.rotation.z = Math.PI / 2; vc.add(vd);
+  addPart(kind + 'vc', 'الدائرة الرأسية', 'تدور مع المنظار وتعطي زاوية الزنت Z (0° للأعلى و90° أفقياً). في الوجه II تقرأ 360° − Z.', vc, tel, new V3(0.104, 0, 0), new V3(0.16, 0, 0));
+  const sg = new THREE.Group(); sg.add(rz(mesh(cyl(0.006, 0.1, 10), MT.dark)), mesh(new THREE.TorusGeometry(0.008, 0.0015, 8, 16), MT.silver, 0, 0, -0.05));
+  addPart(kind + 'sg', 'المنظار الأولي', 'هدّافة فوق المنظار للتوجيه التقريبي قبل النظر في المنظار الرئيسي.', sg, tel, new V3(0, tr + 0.012, 0), new V3(0, 0.2, 0));
+  if (ts) {
+    const ed = new THREE.Group();
+    ed.add(mesh(box(0.05, 0.03, 0.04), MT.dark), mesh(box(0.022, 0.02, 0.004), M.lens, -0.012, 0, -0.021), mesh(box(0.022, 0.02, 0.004), M.lens, 0.012, 0, -0.021));
+    addPart('tsed', 'وحدة قياس المسافة EDM', 'ترسل حزمة تحت حمراء إلى المنشور العاكس وتحسب المسافة المائلة من زمن/طور عودتها. لا تعيد إشارة إن لم تكن الشعيرة على المنشور.', ed, tel, new V3(0, tr + 0.02, -0.1), new V3(0, 0.14, -0.2));
+    const cp = new THREE.Group();
+    cp.add(mesh(box(0.028, 0.028, 0.05), MT.silver), mesh(cyl(0.004, 0.02, 8), MT.dark, 0, -0.024, 0), mesh(new THREE.SphereGeometry(0.007, 10, 8), M.red, 0, -0.038, 0));
+    addPart('tscp', 'المعوّض ثنائي المحور', 'يقيس الميلان في اتجاهين ويصحّح قراءة الزاوية الرأسية ضمن ±3′. خارج المدى تظهر رسالة خطأ وتعود القراءات غير مصحّحة.', cp, tel, new V3(0, 0, 0.02), new V3(0, -0.15, 0.1));
+  }
+}

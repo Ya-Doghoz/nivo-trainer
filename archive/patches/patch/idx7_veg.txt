@@ -1,0 +1,2 @@
+<div class="row"><label>🌳 كثافة الأشجار</label><select id="cfgVeg"><option value="0">بدون أشجار</option><option value="0.25">قليلة جداً</option><option value="0.5">قليلة</option><option value="1">متوسطة</option><option value="1.6">كثيفة</option></select></div>
+      

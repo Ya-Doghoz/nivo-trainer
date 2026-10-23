@@ -1,0 +1,28 @@
+// ---------- صورة الخريطة (كنتورية) ----------
+export function mapImage(half = 120, res = 240) {
+  if (mapCache && mapCache.seed === P.seed && mapCache.half === half && mapCache.res === res) return mapCache;
+  const n = res + 2, step = 2 * half / res, hs = new Float32Array(n * n);
+  let mn = 1e9, mx = -1e9;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const h = terrainH(-half + (i - 0.5) * step, -half + (j - 0.5) * step); hs[j * n + i] = h; if (h < mn) mn = h; if (h > mx) mx = h; }
+  const range = Math.max(0.5, mx - mn), iv = range > 160 ? 10 : range > 80 ? 5 : range > 40 ? 2.5 : range > 14 ? 2 : range > 7 ? 1 : range > 3.5 ? 0.5 : 0.25;
+  const cv = document.createElement('canvas'); cv.width = cv.height = res;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(res, res);
+  for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
+    const k = (j + 1) * n + (i + 1), h = hs[k], t = (h - mn) / range;
+    const dx = (hs[k + 1] - hs[k - 1]) / (2 * step), dz = (hs[k + n] - hs[k - n]) / (2 * step);
+    const sh = clamp((0.5 * dx + 0.7 + 0.5 * dz) / Math.sqrt(dx * dx + 1 + dz * dz) / 0.99 * 1.2, 0.45, 1.15);
+    let r, g, b;
+    if (t < 0.5) { const u = t / 0.5; r = 0.38 + 0.47 * u; g = 0.64 + 0.18 * u; b = 0.38 + 0.1 * u; }
+    else { const u = (t - 0.5) / 0.5; r = 0.85 - 0.2 * u; g = 0.82 - 0.35 * u; b = 0.48 - 0.15 * u; }
+    r *= sh; g *= sh; b *= sh;
+    const x = -half + (i + 0.5) * step, z = -half + (j + 0.5) * step;
+    if (Math.floor(h / iv) !== Math.floor(hs[k + 1] / iv) || Math.floor(h / iv) !== Math.floor(hs[k + n] / iv)) { r *= 0.55; g *= 0.55; b *= 0.55; }
+    if (Math.abs(x - roadX(z)) < 1.6 + step * 0.3) { r = 0.78; g = 0.66; b = 0.5; }
+    { const ri = riverInfo(x, z); if (ri.d < ri.hw + 1.8) { r = 0.16; g = 0.42; b = 0.72; } else if (ri.d < ri.hw + 5) { r *= 0.8; g *= 0.88; } if (onDeck(x, z)) { r = 0.6; g = 0.5; b = 0.38; } }
+    const o = (j * res + i) * 4; img.data[o] = r * 255; img.data[o + 1] = g * 255; img.data[o + 2] = b * 255; img.data[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  mapCache = { canvas: cv, mn, mx, iv, half, res, seed: P.seed };
+  return mapCache;
+}
+

@@ -1,0 +1,19 @@
+export function setMarkers(points, setups) {
+  while (markGroup.children.length) {
+    const o = markGroup.children.pop();
+    if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    if (o.geometry) o.geometry.dispose();
+  }
+  points.forEach(p => {
+    const gy = groundH(p.x, p.z);
+    const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.25, 8), new THREE.MeshLambertMaterial({ color: p.bm ? 0x2ea043 : 0xdd2222 }));
+    peg.position.set(p.x, gy + 0.06, p.z); markGroup.add(peg);
+    const sp = makeLabel(p.id, p.bm ? '#2ea043' : '#e8402a'); sp.position.set(p.x, gy + 5.4, p.z); markGroup.add(sp);
+  });
+  setups.forEach(s => {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.1, 24), new THREE.MeshBasicMaterial({ color: 0x4dabf7, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(s.x, groundH(s.x, s.z) + 0.05, s.z); markGroup.add(ring);
+  });
+  clearVeg(points, setups);
+}
+

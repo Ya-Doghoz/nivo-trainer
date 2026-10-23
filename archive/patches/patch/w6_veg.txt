@@ -1,0 +1,146 @@
+// نباتات ومنازل موزَّعة على كل الخريطة + إخلاء خطوط النظر ديناميكياً
+let VEG = [], HOUSES = [];
+const ZERO_M = new THREE.Matrix4().makeScale(0, 0, 0);
+
+function buildVeg() {
+  VEG = [];
+  const r = mulberry32(P.seed * 31 + 7), dummy = new THREE.Object3D(), c = new THREE.Color();
+  const lam = () => new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const plain = (geo, mat, n) => { const m = new THREE.InstancedMesh(geo, mat, n); m.count = 0; m.frustumCulled = false; W.add(m); return m; };
+  const reg = (geo, mat, n) => { const o = { mesh: plain(geo, mat, n), n: 0, max: n, xz: [], base: new Float32Array(n * 16), hid: new Uint8Array(n) }; VEG.push(o); return o; };
+  const put = (o, x, z, rad) => {
+    if (o.n >= o.max) return -1;
+    dummy.updateMatrix(); dummy.matrix.toArray(o.base, o.n * 16); o.mesh.setMatrixAt(o.n, dummy.matrix); o.xz.push(x, z, rad);
+    return o.n++;
+  };
+  const fin = o => { o.mesh.count = o.n; o.mesh.instanceMatrix.needsUpdate = true; if (o.mesh.instanceColor) o.mesh.instanceColor.needsUpdate = true; };
+  const rnd2 = () => (r() - 0.5) * 540;
+
+  // ---- أشجار ----
+  const trunkG = new THREE.CylinderGeometry(0.12, 0.2, 1, 6); trunkG.translate(0, 0.5, 0);
+  const pineG = new THREE.ConeGeometry(1.2, 4.4, 7); pineG.translate(0, 2.2, 0);
+  const roundG = new THREE.IcosahedronGeometry(1.5, 1), MAXT = 1100;
+  const T0 = reg(trunkG, new THREE.MeshLambertMaterial({ color: 0x6b4a2b }), MAXT), T1 = reg(pineG, lam(), MAXT), T2 = reg(roundG, lam(), MAXT);
+  const addTree = (x, z, kind, sc) => {
+    if (T0.n >= MAXT) return;
+    const gy = groundH(x, z), pine = kind === 'pine', ol = kind === 'olive';
+    dummy.rotation.set(0, r() * 6.28, 0);
+    dummy.position.set(x, gy - 0.1, z); dummy.scale.set(sc, (pine ? 1.4 : 2.2) * sc, sc); put(T0, x, z, (pine ? 1.2 : 1.5) * sc);
+    if (pine) {
+      dummy.position.set(x, gy + 0.9 * sc, z); dummy.scale.set(sc, sc, sc);
+      const k = put(T1, x, z, 1.2 * sc); if (k >= 0) { c.setHSL(0.33 + r() * 0.04, 0.45, 0.15 + r() * 0.08); T1.mesh.setColorAt(k, c); }
+    } else {
+      dummy.position.set(x, gy + (ol ? 1.9 : 2.9) * sc, z); dummy.scale.set(sc * (ol ? 0.9 : 1), sc * (ol ? 0.7 : 0.9), sc * (ol ? 0.9 : 1));
+      const k = put(T2, x, z, 1.5 * sc);
+      if (k >= 0) { if (ol) c.setHSL(0.22, 0.25, 0.38 + r() * 0.08); else c.setHSL(0.24 + r() * 0.08 - P.dry * 0.06, 0.5 - P.dry * 0.15, 0.26 + r() * 0.1); T2.mesh.setColorAt(k, c); }
+    }
+  };
+  const thr = { pinewood: 0.45, meadow: 0.56, steppe: 0.66, orchard: 0.58 }[P.biome];
+  for (let i = 0; i < 16000 && T0.n < 900; i++) {
+    const x = rnd2(), z = rnd2(), near = Math.hypot(x, z) < 100;
+    if (Math.abs(x - roadX(z)) < 6) continue;
+    const f = fbm(x * 0.011 + P.ox * 1.3, z * 0.011 + P.oz * 1.3);
+    if (f < thr && r() > 0.03) continue;
+    if (near && r() > 0.5) continue;
+    const pine = P.biome === 'pinewood' ? r() < 0.8 : fbm(x * 0.02 + 3, z * 0.02) > 0.5 && P.dry < 0.6;
+    addTree(x, z, pine ? 'pine' : 'round', 0.8 + r() * 0.9);
+  }
+  // بساتين زيتون بصفوف منتظمة في عدة بقع
+  const nOrch = P.biome === 'orchard' ? 3 : 1 + Math.floor(r() * 2);
+  for (let k = 0; k < nOrch; k++) {
+    const a = r() * 6.28, d = 55 + r() * 190, cx = Math.cos(a) * d, cz = Math.sin(a) * d, rot = r() * 3.14, cs = Math.cos(rot), sn = Math.sin(rot);
+    for (let i = 0; i < 7; i++) for (let j = 0; j < 9; j++) { const px = (i - 3) * 7, pz = (j - 4) * 7; addTree(cx + px * cs - pz * sn, cz + px * sn + pz * cs, 'olive', 0.9 + r() * 0.2); }
+  }
+  fin(T0); fin(T1); fin(T2);
+
+  // ---- شجيرات وصخور (تُخلى حول النقاط) ----
+  const bu = reg(new THREE.IcosahedronGeometry(0.5, 1), lam(), 700);
+  for (let i = 0; i < 6000 && bu.n < 600; i++) {
+    const x = rnd2(), z = rnd2();
+    if (Math.abs(x - roadX(z)) < 3.5) continue;
+    if (fbm(x * 0.02 + P.ox, z * 0.02 + P.oz) < 0.42 && r() > 0.25) continue;
+    const sc = 0.5 + r() * 0.8;
+    dummy.position.set(x, groundH(x, z) + 0.25 * sc, z); dummy.rotation.set(0, r() * 6, 0); dummy.scale.set(sc * 1.2, sc * 0.8, sc * 1.2);
+    const k = put(bu, x, z, 0.6 * sc); if (k >= 0) { c.setHSL(0.26 - P.dry * 0.08 + r() * 0.05, 0.45 - P.dry * 0.15, 0.2 + r() * 0.1); bu.mesh.setColorAt(k, c); }
+  }
+  fin(bu);
+  const rk = reg(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: 0x8a8d90 }), 400);
+  for (let i = 0; i < 4000 && rk.n < 320; i++) {
+    const x = rnd2(), z = rnd2(), gy = groundH(x, z), sl = Math.abs(groundH(x + 2, z) - gy) / 2;
+    if (r() > 0.2 + sl * 9) continue;
+    const sc = 0.15 + r() * r() * 0.9;
+    dummy.position.set(x, gy + sc * 0.2, z); dummy.rotation.set(r() * 3, r() * 3, r() * 3); dummy.scale.set(sc, sc * 0.6, sc * 0.9); put(rk, x, z, 0.8 * sc);
+  }
+  fin(rk);
+
+  // ---- أعشاب وأزهار (لا تحجب الرؤية) ----
+  const tuftG = new THREE.ConeGeometry(0.07, 0.4, 4); tuftG.translate(0, 0.2, 0);
+  const tf = plain(tuftG, lam(), 9000); let nf = 0;
+  for (let i = 0; i < 30000 && nf < 9000; i++) {
+    const x = rnd2(), z = rnd2();
+    if (Math.abs(x - roadX(z)) < 2.5) continue;
+    const sc = 0.6 + r() * 1.2;
+    dummy.position.set(x, groundH(x, z), z); dummy.rotation.set(0, r() * 6, 0); dummy.scale.set(sc, sc, sc); dummy.updateMatrix();
+    tf.setMatrixAt(nf, dummy.matrix); c.setHSL(0.22 - P.dry * 0.06 + r() * 0.08, 0.5 - P.dry * 0.2, 0.25 + r() * 0.15); tf.setColorAt(nf++, c);
+  }
+  tf.count = nf; tf.instanceMatrix.needsUpdate = true; if (tf.instanceColor) tf.instanceColor.needsUpdate = true;
+  if (P.dry < 0.7) {
+    const fl = plain(new THREE.SphereGeometry(0.06, 5, 4), lam(), 1500); let nl = 0;
+    const pal = [0xffffff, 0xffd84a, 0xc58bff, 0xff7a7a];
+    for (let i = 0; i < 6000 && nl < 1500; i++) {
+      const x = rnd2(), z = rnd2();
+      if (Math.abs(x - roadX(z)) < 2.5 || fbm(x * 0.03 + P.ox * 2, z * 0.03 + P.oz * 2) < 0.5) continue;
+      dummy.position.set(x, groundH(x, z) + 0.22, z); dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+      fl.setMatrixAt(nl, dummy.matrix); c.setHex(pal[Math.floor(r() * 4)]); fl.setColorAt(nl++, c);
+    }
+    fl.count = nl; fl.instanceMatrix.needsUpdate = true; if (fl.instanceColor) fl.instanceColor.needsUpdate = true;
+  }
+
+  // ---- أعمدة كهرباء بمحاذاة الطريق ----
+  const wood = new THREE.MeshLambertMaterial({ color: 0x5a4632 });
+  const pg = plain(new THREE.CylinderGeometry(0.09, 0.11, 8, 6), wood, 24), ca = plain(new THREE.BoxGeometry(2.2, 0.12, 0.12), wood, 24); let np = 0;
+  for (let z = -260; z <= 260 && np < 24; z += 45) {
+    const x = roadX(z) + 4.5;
+    dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.position.set(x, groundH(x, z) + 4, z); dummy.updateMatrix(); pg.setMatrixAt(np, dummy.matrix);
+    dummy.position.y += 3.6; dummy.updateMatrix(); ca.setMatrixAt(np++, dummy.matrix);
+  }
+  pg.count = ca.count = np; pg.instanceMatrix.needsUpdate = true; ca.instanceMatrix.needsUpdate = true;
+}
+
+function buildHouses() {
+  HOUSES = [];
+  const r = mulberry32(P.seed * 17 + 3), nv = 2 + Math.floor(r() * 2);
+  const house = (x, z) => {
+    const w = 6 + r() * 5, h = 3.5 + r() * 2, g = new THREE.Group();
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.8), new THREE.MeshLambertMaterial({ color: [0xd9c9a8, 0xe8e0d0, 0xcfc0a0, 0xe0d2b8][Math.floor(r() * 4)] })); wall.position.y = h / 2; g.add(wall);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(w * 0.78, h * 0.5, 4), new THREE.MeshLambertMaterial({ color: r() < 0.5 ? 0x9a4a32 : 0x6e5a4a })); roof.rotation.y = Math.PI / 4; roof.position.y = h + h * 0.25; roof.scale.z = 0.8; g.add(roof);
+    g.position.set(x, groundH(x, z), z); g.rotation.y = r() * 3; W.add(g); HOUSES.push({ g, x, z, rad: w });
+  };
+  for (let v = 0; v < nv; v++) {
+    const a = r() * 6.283, d = 70 + r() * 190, vx = Math.cos(a) * d, vz = Math.sin(a) * d, n = 3 + Math.floor(r() * 5);
+    for (let i = 0; i < n; i++) { const x = vx + (r() - 0.5) * 55, z = vz + (r() - 0.5) * 55; if (Math.abs(x - roadX(z)) > 10) house(x, z); }
+  }
+  for (let i = 0; i < 3; i++) { const a = r() * 6.283, d = 60 + r() * 200, x = Math.cos(a) * d, z = Math.sin(a) * d; if (Math.abs(x - roadX(z)) > 10) house(x, z); }
+}
+
+// إخفاء ما يحجب خطوط النظر بين مواضع الجهاز والنقاط، وما حول النقاط نفسها
+export function clearVeg(points, setups) {
+  const pts = points.concat(setups), segs = [];
+  points.forEach(p => setups.forEach(s => segs.push([s.x, s.z, p.x, p.z])));
+  const sd = (x, z, s) => {
+    const dx = s[2] - s[0], dz = s[3] - s[1], t = Math.max(0, Math.min(1, ((x - s[0]) * dx + (z - s[1]) * dz) / (dx * dx + dz * dz || 1)));
+    return Math.hypot(x - s[0] - t * dx, z - s[1] - t * dz);
+  };
+  const blocked = (x, z, rad) => pts.some(q => Math.hypot(x - q.x, z - q.z) < rad + 3.5) || segs.some(s => sd(x, z, s) < rad + 2.2);
+  const m = new THREE.Matrix4();
+  VEG.forEach(o => {
+    let dirty = false;
+    for (let i = 0; i < o.n; i++) {
+      const hide = blocked(o.xz[i * 3], o.xz[i * 3 + 1], o.xz[i * 3 + 2]);
+      if (hide !== !!o.hid[i]) { o.hid[i] = hide ? 1 : 0; o.mesh.setMatrixAt(i, hide ? ZERO_M : m.fromArray(o.base, i * 16)); dirty = true; }
+    }
+    if (dirty) o.mesh.instanceMatrix.needsUpdate = true;
+  });
+  HOUSES.forEach(h => { h.g.visible = !blocked(h.x, h.z, h.rad + 4); });
+}
+

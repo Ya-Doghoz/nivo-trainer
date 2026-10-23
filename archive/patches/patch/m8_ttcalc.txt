@@ -1,0 +1,18 @@
+function ttCalc(r) {
+  const su = setupById(r.su), p = ptById(r.pt), o = {};
+  if (!su || !p) return o;
+  const zen = SM.zenith(r.v, r.face), Zs = zOf(su);
+  o.Dt = Math.hypot(p.x - su.x, p.z - su.z); o.Zt = zOf(p);
+  if (r.k === 'tach' || r.k === 'theo') {
+    if (r.u != null && r.l != null) {
+      Object.assign(o, r.k === 'tach' ? SM.stadiaReduced(r, Zs) : SM.stadiaClassic(r, zen, Zs));
+      o.eD = (o.D - o.Dt) * 100; if (o.Z != null) o.eZ = (o.Z - o.Zt) * 1000;
+    }
+  } else if (r.sd != null) {
+    const c0 = crd(su.x, su.z), ct = crd(p.x, p.z);
+    Object.assign(o, SM.totalStation(r, c0, Zs));
+    o.eN = (o.N - ct.N) * 1000; o.eE = (o.E - ct.E) * 1000; o.eZ = (o.Z - o.Zt) * 1000;
+  }
+  return o;
+}
+

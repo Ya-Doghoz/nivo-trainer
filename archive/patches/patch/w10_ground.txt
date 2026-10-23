@@ -1,0 +1,207 @@
+// NIVO-V10 — خريطة 1000 م: تضاريس وعرة + نهر مرن + جسور متعددة + أبعاد البيوت
+const WH = 500, TERH = 1160;
+const ridge = (x, z) => 1 - Math.abs(2 * vnoise(x, z) - 1);
+
+function baseH(x, z) {
+  const rr = Math.hypot(x, z);
+  const far = smooth(90, 230, rr), rel = 0.5 + 0.5 * far;
+  const wx = x + 30 * (vnoise(x * 0.008 + P.ox, z * 0.008 + P.oz) - 0.5), wz = z + 30 * (vnoise(x * 0.008 + P.oz, z * 0.008 + P.ox) - 0.5);
+  const big = (fbm(wx * P.f + P.ox, wz * P.f + P.oz) - 0.47) * 2 * P.amp;
+  const rg = 1 - Math.abs(2 * vnoise(wx * 0.018 + P.ox * 2.1, wz * 0.018 + P.oz * 1.7) - 1);
+  const mid = (rg * rg - 0.3) * P.amp2 * 1.6 + (fbm(x * 0.03 + P.ox * 3, z * 0.03 + P.oz * 3) - 0.47) * 0.35;
+  let h = (big + mid) * rel + (P.tx * x + P.tz * z) * (0.35 + 0.65 * far);
+  const tz = smooth(0.58, 0.72, vnoise(x * 0.005 + P.ox * 1.9, z * 0.005 + P.oz * 1.1)) * far;
+  if (tz > 0) { const s = 1.0, k = h / s, f = k - Math.floor(k); h += ((Math.floor(k) + smooth(0.6, 1.0, f)) * s - h) * 0.6 * tz; }
+  // وعورة: جبال وتلال وأودية عميقة بعيداً عن منطقة العمل وعن النهر (أرض لا تنفع فيها الميرا)
+  const f2 = smooth(170, 480, rr) * (RV ? smooth(25, 220, rvDist(x, z)) : 1);
+  if (f2 > 0) {
+    const mk = smooth(0.46, 0.7, fbm(x * 0.0021 + P.ox * 0.7, z * 0.0021 + P.oz * 0.7));
+    const rd = ridge(x * 0.0042 + P.ox, z * 0.0042 + P.oz), hl = (fbm(x * 0.009 + P.ox * 1.1, z * 0.009 + P.oz * 1.1) - 0.45) * 2;
+    const gv = smooth(0.87, 0.985, ridge(x * 0.011 + P.ox * 2, z * 0.011 + P.oz * 3));
+    h += f2 * (mk * (P.mtn || 60) * (rd * rd + 0.22 * hl) + (1 - mk) * 9 * hl - gv * (4 + 7 * mk));
+  }
+  const rim = smooth(620, 1020, rr);
+  return h + rim * rim * P.rim * 3.2 * (0.6 + 0.8 * vnoise(x * 0.01 + 5, z * 0.01 + 9));
+}
+
+// ---------- النهر ----------
+let RV = null, BRGS = [];
+const rvCl = s => RV.off + RV.A1 * Math.sin(RV.k1 * s + RV.p1) + RV.A2 * Math.sin(RV.k2 * s + RV.p2);
+const rvDcl = s => RV.A1 * RV.k1 * Math.cos(RV.k1 * s + RV.p1) + RV.A2 * RV.k2 * Math.cos(RV.k2 * s + RV.p2);
+const rvHW = s => RV.w0 + RV.w1 * (vnoise(s * 0.02 + P.ox * 0.5, P.oz) - 0.5) * 2;
+function rvDist(x, z) { const s = x * RV.dx + z * RV.dz, n = x * RV.nx + z * RV.nz, dc = rvDcl(s); return Math.abs(n - rvCl(s)) / Math.sqrt(1 + dc * dc); }
+function wlAt(s) {
+  const f = (s - RV.S0) / RV.ds, i = Math.max(0, Math.min(RV.wl.length - 2, Math.floor(f))), t = Math.max(0, Math.min(1, f - i));
+  return RV.wl[i] * (1 - t) + RV.wl[i + 1] * t;
+}
+export function riverInfo(x, z) {
+  if (!RV) return { d: 1e9, hw: 0, s: 0, wl: 0 };
+  const s = x * RV.dx + z * RV.dz;
+  return { d: rvDist(x, z), hw: rvHW(s), s, wl: wlAt(s) };
+}
+function makeRiver() {
+  const r = mulberry32(P.seed * 101 + 77), ang = r() * Math.PI;
+  P.mtn = 38 + 45 * r();
+  RV = { dx: Math.cos(ang), dz: Math.sin(ang), nx: -Math.sin(ang), nz: Math.cos(ang), off: (r() - 0.5) * 680,
+    A1: 40 + r() * 60, k1: 0.0035 + r() * 0.0035, p1: r() * 6.28, A2: 8 + r() * 14, k2: 0.018 + r() * 0.014, p2: r() * 6.28,
+    w0: 3.4 + r() * 1.8, w1: 1.2, ds: 10, S0: -1300, wl: [], dir: 1 };
+  // منسوب الماء: متوسط الأرض الأصلية على المجرى − 0.7 م، ويجري باتجاه انحدار الأرض
+  const n = 261, raw = [];
+  for (let i = 0; i < n; i++) { const s = RV.S0 + i * RV.ds, c = rvCl(s); raw.push(baseH(s * RV.dx + c * RV.nx, s * RV.dz + c * RV.nz)); }
+  const q = Math.floor(n / 4), mean = (a, b) => { let t = 0; for (let i = a; i < b; i++) t += raw[i]; return t / (b - a); };
+  RV.dir = mean(0, q) >= mean(n - q, n) ? 1 : -1;
+  const avg = raw.map((_, i) => { let a = 0, k = 0; for (let j = Math.max(0, i - 8); j <= Math.min(n - 1, i + 8); j++) { a += raw[j]; k++; } return a / k; });
+  const wl = new Array(n); let prev = Infinity;
+  for (let t = 0; t < n; t++) { const i = RV.dir > 0 ? t : n - 1 - t; prev = Math.min(prev - 0.0006 * RV.ds, avg[i] - 0.7); wl[i] = prev; }
+  RV.wl = wl;
+  makeBridges();
+}
+// تحفير المجرى: قاع، ضفاف منحدرة، ثم انتقال تدريجي إلى الأرض المحيطة
+function carve(h0, x, z) {
+  const ri = riverInfo(x, z), d = ri.d, hw = ri.hw, BW = 9, FADE = 14;
+  if (d > hw + BW + FADE) return h0;
+  const wl = ri.wl;
+  let target;
+  if (d < hw) { const q = d / hw; target = wl - 0.2 - 0.9 * (1 - q * q); }
+  else if (d < hw + BW) target = wl - 0.2 + 1.5 * smooth(0, 1, (d - hw) / BW);
+  else target = wl + 1.3 + (d - hw - BW) * 0.02;
+  const w = d < hw + BW ? 1 : 1 - smooth(hw + BW, hw + BW + FADE, d);
+  return h0 + (target - h0) * w;
+}
+function terrainH(x, z) { const h0 = baseH(x, z); return RV ? carve(h0, x, z) : h0; }
+
+// الجسور: عند كل تقاطع بين الطريق والنهر
+function makeBridges() {
+  BRGS = [];
+  const cand = []; let grp = null;
+  for (let z = -TERH + 40; z <= TERH - 40; z += 2) {
+    const x = roadX(z), ri = riverInfo(x, z);
+    if (ri.d < ri.hw + 6) { if (!grp || ri.d < grp.d) grp = { x, z, d: ri.d, hw: ri.hw }; }
+    else if (grp) { cand.push(grp); grp = null; }
+  }
+  if (grp) cand.push(grp);
+  cand.forEach(b => {
+    if (b.d > b.hw + 1 || BRGS.some(o => Math.hypot(o.x - b.x, o.z - b.z) < 80)) return;
+    const tx = roadX(b.z + 4) - roadX(b.z - 4), tz = 8, tl = Math.hypot(tx, tz), ux = tx / tl, uz = tz / tl;
+    const ri = riverInfo(b.x, b.z), dc = rvDcl(ri.s);
+    let rx = RV.dx + RV.nx * dc, rz = RV.dz + RV.nz * dc; const rl = Math.hypot(rx, rz); rx /= rl; rz /= rl;
+    const cosf = Math.max(0.35, Math.abs(ux * -rz + uz * rx)), hl = (ri.hw + 6) / cosf + 3;
+    const e1 = terrainH(b.x + ux * hl, b.z + uz * hl), e2 = terrainH(b.x - ux * hl, b.z - uz * hl);
+    BRGS.push({ x: b.x, z: b.z, ux, uz, hl, hw: 2.1, y: Math.max(e1, e2, ri.wl + 1.1) + 0.12 });
+  });
+}
+const onDeckOf = (B, x, z) => { const dx = x - B.x, dz = z - B.z; return Math.abs(dx * B.ux + dz * B.uz) <= B.hl && Math.abs(-dx * B.uz + dz * B.ux) <= B.hw; };
+const deckAt = (x, z) => { for (const B of BRGS) if (onDeckOf(B, x, z)) return B; return null; };
+const onDeck = (x, z) => !!deckAt(x, z);
+// ارتفاع السطح الذي يقف عليه الجهاز/الميرا: الأرض أو سطح الجسر
+export function groundH(x, z) {
+  if (!P) return 0;
+  const B = BRGS.length ? deckAt(x, z) : null;
+  return B ? B.y : terrainH(x, z);
+}
+export const bridgeInfo = () => BRGS[0] || null;
+export const bridgeList = () => BRGS;
+export function isWater(x, z) { if (!RV) return false; const ri = riverInfo(x, z); return ri.d < ri.hw + 1.8 && !onDeck(x, z); }
+const inRiver = (x, z, m = 0) => { if (!RV) return false; const ri = riverInfo(x, z); return ri.d < ri.hw + 1.8 + m; };
+export function wetness(x, z) { if (!RV || onDeck(x, z)) return 0; const ri = riverInfo(x, z); return clamp(1 - (ri.d - ri.hw) / 16, 0, 1); }
+const localDry = (x, z) => {
+  if (!RV) return P.dry;
+  const ri = riverInfo(x, z);
+  return clamp(P.dry + (ri.d - 50) / 300 - 0.25 * clamp(1 - (ri.d - ri.hw) / 16, 0, 1), 0, 1);
+};
+export function inHouse(x, z) { return HOUSES.some(h => Math.hypot(x - h.x, z - h.z) < h.rad * 0.7); }
+export function houseList() { return HOUSES.map(h => ({ x: h.x, z: h.z, w: h.rad, d: h.d, h: h.h, rot: h.rot })); }
+// تصادم كرة نصف قطرها r مع مبنى (جدران + سقف هرمي): يعيد الموضع المُزاح والعمود على السطح
+export function houseCollide(x, y, z, r = 0.8) {
+  for (const h of HOUSES) {
+    const dx = x - h.x, dz = z - h.z;
+    if (dx * dx + dz * dz > (h.w * 0.9 + r) * (h.w * 0.9 + r)) continue;
+    const ey = y - h.y0, top = h.h * 1.5;
+    if (ey < -1 || ey > top + r) continue;
+    const c = Math.cos(h.rot), s = Math.sin(h.rot), lx = dx * c - dz * s, lz = dx * s + dz * c;
+    const body = ey <= h.h, k = body ? 1 : Math.max(0, 1 - (ey - h.h) / (h.h * 0.5));
+    const hx = (body ? 0.5 : 0.55 * k) * h.w + r, hz = (body ? 0.4 : 0.44 * k) * h.w + r;
+    if (Math.abs(lx) >= hx || Math.abs(lz) >= hz) continue;
+    const opts = [[hx - lx, 1, 0, 0], [hx + lx, -1, 0, 0], [hz - lz, 0, 0, 1], [hz + lz, 0, 0, -1], [top + r - ey, 0, 1, 0]];
+    let b = opts[0]; for (const o of opts) if (o[0] < b[0]) b = o;
+    const px = b[1] * b[0], pz = b[3] * b[0];
+    return { x: x + px * c + pz * s, y: y + b[2] * b[0], z: z - px * s + pz * c, nx: b[1] * c + b[3] * s, ny: b[2], nz: -b[1] * s + b[3] * c };
+  }
+  return null;
+}
+export function riverPath() {
+  if (!RV) return [];
+  const o = [];
+  for (let s = -1300; s <= 1300; s += 8) { const c = rvCl(s), x = s * RV.dx + c * RV.nx, z = s * RV.dz + c * RV.nz; if (Math.abs(x) < WH + 80 && Math.abs(z) < WH + 80) o.push({ x, z, hw: rvHW(s) + 1.8, s }); }
+  return RV.dir > 0 ? o : o.reverse();      // بترتيب اتجاه الجريان
+}
+// أقرب موضع جاف (بعيد 6 م عن الماء وخارج المباني)
+export function dryNear(x, z) {
+  for (let rad = 0; rad < 260; rad += 3) for (let a = 0; a < 6.283; a += 0.7) {
+    const px = Math.round(x + Math.cos(a) * rad), pz = Math.round(z + Math.sin(a) * rad), ri = riverInfo(px, pz);
+    if (!isWater(px, pz) && !inHouse(px, pz) && ri.d > ri.hw + 6) return { x: px, z: pz };
+  }
+  return { x: Math.round(x), z: Math.round(z) };
+}
+
+// سطح الماء: شريط يتبع المجرى بشيدر (تموّج + وهج + خطوط جريان)
+let waterMat = null;
+(function tickWater(t) { if (waterMat) waterMat.uniforms.uTime.value = t / 1000; requestAnimationFrame(tickWater); })(0);
+function buildRiver() {
+  if (!RV) return;
+  const step = 6, S0 = -1300, n = Math.floor(2600 / step) + 1, pos = [], uv = [], idx = [], inb = [];
+  let acc = 0, px = null, pz = null;
+  for (let i = 0; i < n; i++) {
+    const s = S0 + i * step, c = rvCl(s), dc = rvDcl(s), cx = s * RV.dx + c * RV.nx, cz = s * RV.dz + c * RV.nz;
+    let tx = RV.dx + RV.nx * dc, tz = RV.dz + RV.nz * dc; const tl = Math.hypot(tx, tz); tx /= tl; tz /= tl;
+    const hw = rvHW(s) + 2.0, y = wlAt(s) - 0.05;
+    if (px !== null) acc += Math.hypot(cx - px, cz - pz);
+    px = cx; pz = cz;
+    pos.push(cx + tz * hw, y, cz - tx * hw, cx - tz * hw, y, cz + tx * hw);
+    uv.push(acc / 6, 0, acc / 6, 1);
+    inb.push(Math.abs(cx) < TERH - 10 && Math.abs(cz) < TERH - 10);
+    if (i > 0 && inb[i] && inb[i - 1]) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  }
+  if (RV.dir < 0) for (let i = 0; i < uv.length; i += 2) uv[i] = acc / 6 - uv[i];     // الجريان نحو -s
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  waterMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: { uTime: { value: 0 }, uSun: { value: P.sunDir.clone() }, uDeep: { value: new THREE.Color(0x174562) }, uShal: { value: new THREE.Color(0x3f8a8e) }, uHor: { value: HOR.clone() } },
+    vertexShader: `varying vec2 vUv; varying vec3 vW; varying float vD;
+void main(){ vUv = uv; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vD = distance(cameraPosition, vW); gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `uniform float uTime; uniform vec3 uSun; uniform vec3 uDeep; uniform vec3 uShal; uniform vec3 uHor; varying vec2 vUv; varying vec3 vW; varying float vD;
+void main(){
+  float edge = 1.0 - abs(vUv.y * 2.0 - 1.0);
+  vec3 base = mix(uShal, uDeep, smoothstep(0.0, 0.7, edge));
+  float t = uTime;
+  vec2 q = vec2(vUv.x * 14.0 - t * 1.1, vUv.y * 6.0);
+  vec3 n = normalize(vec3(sin(q.x * 1.7 + q.y * 2.1) * 0.12 + sin(vW.x * 0.9 + t) * 0.04, 1.0, cos(q.x * 1.3 - q.y * 1.7) * 0.12 + cos(vW.z * 0.8 - t * 0.9) * 0.04));
+  vec3 V = normalize(cameraPosition - vW);
+  float fres = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+  vec3 sky = mix(uHor, vec3(0.45, 0.65, 0.95), 0.5);
+  vec3 col = mix(base, sky, clamp(fres * 0.9 + 0.12, 0.0, 1.0));
+  float glint = pow(max(dot(reflect(-uSun, n), V), 0.0), 90.0) * 2.0;
+  float streak = smoothstep(0.82, 1.0, sin(q.x * 3.0 + sin(q.y * 4.0) * 1.3)) * 0.12;
+  col += vec3(1.0, 0.95, 0.85) * (glint + streak);
+  col = mix(col, uHor, smoothstep(300.0, 2200.0, vD));
+  gl_FragColor = vec4(col, 0.82 + 0.1 * (1.0 - edge));
+  #include <colorspace_fragment>
+}`
+  });
+  const m = new THREE.Mesh(geo, waterMat); m.frustumCulled = false; m.renderOrder = 2; W.add(m);
+  BRGS.forEach(B => {
+    const g = new THREE.Group(), wood = new THREE.MeshLambertMaterial({ color: 0x8a6a45 }), stone = new THREE.MeshLambertMaterial({ color: 0x9a9a98 }), L2 = B.hl * 2;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(B.hw * 2, 0.36, L2), stone); deck.position.y = -0.18; g.add(deck);
+    [-1, 1].forEach(sx => {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, L2), wood); rail.position.set(sx * (B.hw - 0.1), 0.95, 0); g.add(rail);
+      const curb = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.4, L2), stone); curb.position.set(sx * (B.hw - 0.12), 0.2, 0); g.add(curb);
+      for (let z = -B.hl + 1; z <= B.hl - 0.5; z += 3) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.9, 0.12), wood); post.position.set(sx * (B.hw - 0.1), 0.5, z); g.add(post); }
+      const ab = new THREE.Mesh(new THREE.BoxGeometry(B.hw * 2, 2.6, 0.8), stone); ab.position.set(0, -1.5, sx * (B.hl - 0.5)); g.add(ab);
+    });
+    g.position.set(B.x, B.y, B.z); g.rotation.y = Math.atan2(B.ux, B.uz); W.add(g);
+  });
+}
+

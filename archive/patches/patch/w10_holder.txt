@@ -1,0 +1,32 @@
+const crossesWater = (x0, z0, x1, z1) => { for (let t = 0; t <= 1; t += 0.02) if (isWater(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)) return true; return false; };
+function planRoute(x0, z0, x1, z1) {
+  if (!BRGS.length || !crossesWater(x0, z0, x1, z1)) return [];
+  let best = null;
+  for (const B of BRGS) {
+    const e = B.hl + 1.5, a = { x: B.x - B.ux * e, z: B.z - B.uz * e }, b = { x: B.x + B.ux * e, z: B.z + B.uz * e };
+    const d1 = Math.hypot(x0 - a.x, z0 - a.z) + Math.hypot(x1 - b.x, z1 - b.z), d2 = Math.hypot(x0 - b.x, z0 - b.z) + Math.hypot(x1 - a.x, z1 - a.z);
+    const dd = Math.min(d1, d2) + 2 * e;
+    if (!best || dd < best.dd) best = { dd, pts: d1 <= d2 ? [a, b] : [b, a] };
+  }
+  return best.pts;
+}
+export function sendTo(pt) {
+  if (!pt || holder.walking || (holder.station && holder.station.id === pt.id)) return false;
+  const g = holder.group.position;
+  holder.route = planRoute(g.x, g.z, pt.x, pt.z);   // يعبر النهر عبر أقرب جسر مناسب
+  holder.target = pt; holder.walking = true; holder.station = null;
+  return true;
+}
+export function updateHolder(dt) {
+  if (!holder.walking) return;
+  const g = holder.group, wp = holder.route && holder.route.length ? holder.route[0] : null, t = wp || holder.target;
+  const dx = t.x - g.position.x, dz = t.z - g.position.z, d = Math.hypot(dx, dz);
+  if (d < 0.2) { if (wp) { holder.route.shift(); return; } placeHolderAt(holder.target); return; }
+  const k = Math.min(3.2 * dt, d) / d;
+  g.position.x += dx * k; g.position.z += dz * k;
+  g.position.y = groundH(g.position.x, g.position.z);
+  g.rotation.y = Math.atan2(dx, dz);
+  holder.phase += dt * 9;
+  holder.legs[0].rotation.x = Math.sin(holder.phase) * 0.6;
+  holder.legs[1].rotation.x = -Math.sin(holder.phase) * 0.6;
+}

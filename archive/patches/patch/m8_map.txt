@@ -1,0 +1,166 @@
+// ================= الخريطة: المعالم وتحريك النقاط وتثبيتها =================
+// NIVO-V8
+function drawMap() {
+  if (!mapOpen()) return;
+  if (!mapImg) mapImg = mapImage(HALF, 240);
+  const c = mctx, k = MS / (2 * HALF);
+  c.clearRect(0, 0, MS, MS); c.imageSmoothingEnabled = true; c.drawImage(mapImg.canvas, 0, 0, MS, MS);
+  c.lineWidth = 1; c.strokeStyle = 'rgba(255,255,255,.2)'; c.fillStyle = 'rgba(255,255,255,.75)'; c.font = '10px sans-serif'; c.textAlign = 'left';
+  for (let g = -100; g <= 100; g += 20) {
+    const gx = w2m(g, 0)[0], gy = w2m(0, g)[1];
+    c.beginPath(); c.moveTo(gx, 0); c.lineTo(gx, MS); c.moveTo(0, gy); c.lineTo(MS, gy); c.stroke();
+    c.fillText(String(g), gx + 2, MS - 3); c.fillText(String(g), 2, gy - 2);
+  }
+  c.fillStyle = '#fff'; c.font = 'bold 12px sans-serif'; c.fillText('N ↑  كنتور ' + mapImg.iv + ' م', MS - 92, 14);
+  const label = (t, x, y, col) => { c.font = 'bold 12px sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.strokeText(t, x + 8, y - 6); c.fillStyle = col; c.fillText(t, x + 8, y - 6); };
+  // معالم: أسهم جريان النهر + الجسر + المباني
+  const rp = riverPath();
+  c.fillStyle = 'rgba(255,255,255,.92)'; c.strokeStyle = '#1d4f8f'; c.lineWidth = 1;
+  for (let i = 6; i < rp.length - 3; i += 9) {
+    const a = rp[i], b = rp[i + 3];
+    if (Math.abs(a.x) > HALF || Math.abs(a.z) > HALF) continue;
+    const [ax, ay] = w2m(a.x, a.z), [bx, by] = w2m(b.x, b.z), an = Math.atan2(by - ay, bx - ax);
+    c.save(); c.translate(ax, ay); c.rotate(an); c.beginPath(); c.moveTo(7, 0); c.lineTo(-5, -5); c.lineTo(-5, 5); c.closePath(); c.fill(); c.stroke(); c.restore();
+  }
+  const br = bridgeInfo();
+  if (br) { const [bx, by] = w2m(br.x, br.z); c.save(); c.translate(bx, by); c.rotate(Math.atan2(br.uz, br.ux)); c.fillStyle = 'rgba(120,85,50,.95)'; c.fillRect(-br.hl * k, -br.hw * k, br.hl * 2 * k, br.hw * 2 * k); c.restore(); }
+  houseList().forEach(h => {
+    if (Math.abs(h.x) > HALF + 10 || Math.abs(h.z) > HALF + 10) return;
+    const [hx2, hy2] = w2m(h.x, h.z), s = Math.max(5, h.w * k);
+    c.fillStyle = 'rgba(80,60,50,.9)'; c.fillRect(hx2 - s / 2, hy2 - s / 2, s, s); c.strokeStyle = '#fff'; c.lineWidth = 1; c.strokeRect(hx2 - s / 2, hy2 - s / 2, s, s);
+  });
+  const [ix, iy] = w2m(instPos.x, instPos.z), gp = holder.group.position, [hx, hy] = w2m(gp.x, gp.z);
+  c.setLineDash([5, 4]); c.strokeStyle = 'rgba(255,150,40,.9)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(ix, iy); c.lineTo(hx, hy); c.stroke(); c.setLineDash([]);
+  job.setups.forEach((s, i) => {
+    const [x, y] = w2m(s.x, s.z), cur = i === job.cur, r = cur ? 9 : 6;
+    c.fillStyle = cur ? '#4dabf7' : 'rgba(77,171,247,.6)'; c.strokeStyle = '#fff'; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y); c.closePath(); c.fill(); c.stroke();
+    label(s.id, x, y, '#9fd0ff');
+    if (s.locked) { c.font = '12px sans-serif'; c.fillText('📌', x + 4, y + 16); }
+  });
+  job.points.forEach(p => {
+    const [x, y] = w2m(p.x, p.z);
+    c.lineWidth = 1.5; c.strokeStyle = '#fff';
+    if (p.bm) { c.fillStyle = '#2ea043'; c.beginPath(); c.moveTo(x, y - 8); c.lineTo(x + 8, y + 6); c.lineTo(x - 8, y + 6); c.closePath(); c.fill(); c.stroke(); }
+    else { c.fillStyle = '#e8402a'; c.beginPath(); c.arc(x, y, 6, 0, 7); c.fill(); c.stroke(); }
+    label(p.id, x, y, p.bm ? '#7ee787' : '#ffb3a6');
+    if (p.locked) { c.font = '12px sans-serif'; c.fillText('📌', x + 4, y + 16); }
+  });
+  c.fillStyle = '#ff9f43'; c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.beginPath(); c.arc(hx, hy, 4, 0, 7); c.fill(); c.stroke();
+}
+function reach(p) {
+  const g0 = groundH(instPos.x, instPos.z), d = Math.hypot(p.x - instPos.x, p.z - instPos.z);
+  if (isTT()) return { d, ok: d <= 90 };
+  const Rr = g0 + 1.5 + I.TY().trunH + 0.04 - groundH(p.x, p.z);
+  return { d, ok: Rr > 0.25 && Rr < 3.75 && d <= 80 };
+}
+function renderMapList() {
+  if (!mapOpen()) return;
+  const out = [];
+  job.points.forEach(p => {
+    const rc2 = reach(p), c = crd(p.x, p.z), wet = wetness(p.x, p.z) > 0.35;
+    out.push(`<div class="mrow"><span class="mi ${p.bm ? 'bm' : 'pt'}">${p.bm ? '▲' : '●'}</span><b>${p.id}</b>${p.locked ? '<span>📌</span>' : ''}<span class="mx">${p.bm ? `E ${c.E.toFixed(0)} N ${c.N.toFixed(0)}` : `${p.x}, ${p.z}`}</span>${p.bm ? `<input type="number" step="0.001" data-act="elev" data-id="${p.id}" value="${p.elev ?? ''}" placeholder="RL">` : ''}${wet ? '<span class="warn">💧 ضفة: أرض طرية</span>' : ''}<span class="${rc2.ok ? 'ok' : 'warn'}">${rc2.d.toFixed(0)} م ${rc2.ok ? '✓ ضمن المدى' : '⚠ خارج المدى'}</span><button data-act="staff" data-id="${p.id}">👷</button><button data-act="pin" data-id="${p.id}">${p.locked ? '🔓' : '📌'}</button><button data-act="del" data-id="${p.id}">🗑</button></div>`);
+  });
+  job.setups.forEach((s, i) => {
+    const c = crd(s.x, s.z), wet = wetness(s.x, s.z) > 0.35;
+    out.push(`<div class="mrow"><span class="mi st">◆</span><b>${s.id}</b>${s.locked ? '<span>📌</span>' : ''}<span class="mx">E ${c.E.toFixed(0)} N ${c.N.toFixed(0)}</span>${i === job.cur ? '<span class="ok">الحالي</span>' : ''}${wet ? '<span class="warn">💧 أرض طرية</span>' : ''}<button data-act="goto" data-id="${s.id}">🔭</button><button data-act="pin" data-id="${s.id}">${s.locked ? '🔓' : '📌'}</button><button data-act="delS" data-id="${s.id}">🗑</button></div>`);
+  });
+  $('#mapList').innerHTML = out.join('');
+}
+function sendStaff(p) {
+  if (sendTo(p)) toast('الهدف يتحرك نحو ' + p.id);
+  else if (holder.walking) toast('الهدف يتحرك بالفعل');
+  else toast('الهدف عند ' + p.id + ' بالفعل');
+  drawMap();
+}
+function delPoint(p) {
+  if (p.locked) return toast('📌 النقطة مثبّتة: ألغِ التثبيت أولاً');
+  job.points = job.points.filter(q => q !== p);
+  if (holder.station && holder.station.id === p.id) holder.station = null;
+  onJobChanged();
+}
+function delSetup(s) {
+  if (s.locked) return toast('📌 الموضع مثبّت: ألغِ التثبيت أولاً');
+  if (job.setups[job.cur] === s) return toast('لا يمكن حذف موضع الجهاز الحالي');
+  const cur = job.setups[job.cur]; job.setups = job.setups.filter(q => q !== s); job.cur = job.setups.indexOf(cur);
+  onJobChanged();
+}
+function gotoSetup(s) { job.cur = job.setups.indexOf(s); placeInstrument(s); onJobChanged(); }
+
+$('#mapList').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const id = b.dataset.id, act = b.dataset.act, p = ptById(id), s = setupById(id);
+  if (act === 'staff' && p) sendStaff(p);
+  else if (act === 'del' && p) delPoint(p);
+  else if (act === 'goto' && s) gotoSetup(s);
+  else if (act === 'delS' && s) delSetup(s);
+  else if (act === 'pin') { const t = p || s; if (t) { t.locked = !t.locked; onJobChanged(); } }
+});
+$('#mapList').addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.act !== 'elev') return;
+  const p = ptById(t.dataset.id), v = parseFloat(t.value);
+  if (p && Number.isFinite(v)) { p.elev = v; fbRefresh(); ttRefresh(); saveState(); drawMap(); }
+});
+
+// ---- سحب النقاط (أداة التحريك) ----
+const m2w = e => { const r = mapC.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * 2 * HALF - HALF, (e.clientY - r.top) / r.height * 2 * HALF - HALF]; };
+const nearOf = (arr, x, z, rad) => { let b = null, bd = rad; arr.forEach(q => { const d = Math.hypot(q.x - x, q.z - z); if (d < bd) { bd = d; b = q; } }); return b; };
+const nearAny = (x, z, rad) => {
+  const a = nearOf(job.points, x, z, rad), b = nearOf(job.setups, x, z, rad);
+  if (!a) return b; if (!b) return a;
+  return Math.hypot(a.x - x, a.z - z) <= Math.hypot(b.x - x, b.z - z) ? a : b;
+};
+const placeOk = (x, z, isPt) => !isWater(x, z) && (isPt || !inHouse(x, z));
+let mdrag = null;
+mapC.addEventListener('pointerdown', e => {
+  const [x, z] = m2w(e);
+  if (mapTool === 'move') {
+    const t = nearAny(x, z, 9);
+    if (!t) return toast('المس قرب نقطة أو موضع جهاز لتحريكه');
+    if (t.locked) return toast('📌 ' + t.id + ' مثبّتة: ألغِ التثبيت أولاً');
+    mdrag = { t, x0: t.x, z0: t.z }; cap(mapC, e.pointerId); return;
+  }
+  mapTap(x, z);
+});
+mapC.addEventListener('pointermove', e => {
+  if (!mdrag) return;
+  let [x, z] = m2w(e); x = Math.round(clamp(x, -116, 116)); z = Math.round(clamp(z, -116, 116));
+  if (!placeOk(x, z, 'bm' in mdrag.t)) return;
+  mdrag.t.x = x; mdrag.t.z = z; drawMap();
+});
+const endDrag = () => {
+  if (!mdrag) return;
+  const d = mdrag, t = d.t; mdrag = null;
+  if (t.x === d.x0 && t.z === d.z0) return;
+  if ('bm' in t) { if (holder.station && holder.station.id === t.id) placeHolderAt(t); toast('نُقلت ' + t.id + ' — أي قراءات سابقة عليها لم تعد صالحة'); }
+  else if (job.setups[job.cur] === t) { placeInstrument(t, true); toast('نُقل الجهاز إلى ' + t.id + ' وأُعيد ضبطه'); }
+  onJobChanged();
+};
+mapC.addEventListener('pointerup', endDrag); mapC.addEventListener('pointercancel', endDrag);
+
+function mapTap(x, z) {
+  x = Math.round(clamp(x, -116, 116)); z = Math.round(clamp(z, -116, 116));
+  if (mapTool === 'pt' || mapTool === 'bm') {
+    if (isWater(x, z)) return toast('💧 لا يمكن وضع نقطة داخل الماء');
+    if (nearOf(job.points, x, z, 4)) return toast('قريبة جداً من نقطة أخرى');
+    const bm = mapTool === 'bm', p = { id: nextId(bm ? 'BM' : 'P'), x, z, bm, elev: null };
+    if (bm) { const t = trueRL({ x, z }); p.elev = t === null ? 100 : Math.round(t * 1000) / 1000; }
+    job.points.push(p); onJobChanged();
+  } else if (mapTool === 'inst') {
+    if (isWater(x, z)) return toast('💧 لا يمكن وضع الجهاز داخل الماء (ضعه على الضفة أو الجسر)');
+    if (inHouse(x, z)) return toast('🏠 لا يمكن وضع الجهاز داخل مبنى');
+    const s0 = nearOf(job.setups, x, z, 6);
+    if (s0) gotoSetup(s0);
+    else { const s = { id: nextSetup(), x, z }; job.setups.push(s); gotoSetup(s); }
+  } else if (mapTool === 'staff') {
+    const p = nearOf(job.points, x, z, 10); if (p) sendStaff(p); else toast('المس قرب نقطة لإرسال الهدف إليها');
+  } else if (mapTool === 'del') {
+    const t = nearAny(x, z, 6);
+    if (!t) toast('لا توجد نقطة هنا'); else if ('bm' in t) delPoint(t); else delSetup(t);
+  } else if (mapTool === 'pin') {
+    const t = nearAny(x, z, 8);
+    if (!t) return toast('المس قرب نقطة أو موضع جهاز');
+    t.locked = !t.locked; toast(t.locked ? '📌 ثُبّتت ' + t.id : 'أُلغي تثبيت ' + t.id); onJobChanged();
+  }
+}
