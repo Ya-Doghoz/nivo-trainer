@@ -3,3 +3,6 @@ node_modules/
 *.orig
 *.tgz
 .DS_Store
+packets/
+.apply-backup/
+public/models/*.glb
