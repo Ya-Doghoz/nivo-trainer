@@ -68,6 +68,11 @@ console.log('2) معادلات المسح (survey-math.js)');
   });
   miss.size ? [...miss].slice(0, 25).forEach(m => wn('معرّف غير موجود في HTML: ' + m)) : ok('كل المعرّفات المستعملة موجودة');
 
+  console.log('5) أسماء غير معرّفة (no-undef) — يكشف أخطاء التقسيم والنسيان');
+  const lr = cp.spawnSync(process.execPath, ['--expose-internals', path.join(__dirname, 'lint-undef.js'), ...files.map(f => path.join(pub, f))], { encoding: 'utf8' });
+  (lr.stdout || '').split('\n').filter(Boolean).forEach(l => { if (l.startsWith('PASS ')) ok(l.slice(5)); else if (l.startsWith('FAIL ')) bad(l.slice(5)); else if (l.startsWith('WARN ')) wn(l.slice(5)); });
+  if (!(lr.stdout || '').trim()) wn('كاشف no-undef لم يُنتج ناتجاً: ' + (lr.stderr || '').split('\n')[0]);
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\nالنتيجة: ${pass} نجح · ${fail} فشل · ${warn} تحذير`);
   process.exit(fail ? 1 : 0);
