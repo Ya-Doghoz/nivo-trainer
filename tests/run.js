@@ -73,6 +73,11 @@ console.log('2) معادلات المسح (survey-math.js)');
   (lr.stdout || '').split('\n').filter(Boolean).forEach(l => { if (l.startsWith('PASS ')) ok(l.slice(5)); else if (l.startsWith('FAIL ')) bad(l.slice(5)); else if (l.startsWith('WARN ')) wn(l.slice(5)); });
   if (!(lr.stdout || '').trim()) wn('كاشف no-undef لم يُنتج ناتجاً: ' + (lr.stderr || '').split('\n')[0]);
 
+  console.log('6) تحميل الوحدات (module-smoke) — يكشف أخطاء الاستيراد والتصدير بعد التقسيم');
+  const ms = cp.spawnSync(process.execPath, ['--expose-internals', path.join(__dirname, 'module-smoke.js'), pub], { encoding: 'utf8' });
+  (ms.stdout || '').split('\n').filter(Boolean).forEach(l => { if (l.startsWith('PASS ')) ok(l.slice(5)); else if (l.startsWith('FAIL ')) bad(l.slice(5)); else if (l.startsWith('WARN ')) wn(l.slice(5)); });
+  if (!(ms.stdout || '').trim()) wn('module-smoke لم يُنتج ناتجاً: ' + (ms.stderr || '').split('\n')[0]);
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\nالنتيجة: ${pass} نجح · ${fail} فشل · ${warn} تحذير`);
   process.exit(fail ? 1 : 0);
