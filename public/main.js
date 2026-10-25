@@ -4,26 +4,13 @@ import * as I from './instrument.js';
 import * as SM from './survey-math.js';
 import { createScopeFX } from './scopefx.js';
 import { prismFace, setTarget, setPrismHeight, getPrismHeight, setStaffZero } from './targets.js';
+import { $, $$, clamp, V3, DEG, TAU, wrapPi, cap, numOrNull, f3, dms, showErr, toast, openTab, setTxt, setCl } from './util.js';
+import { CFG, saveCfg, ST } from './state.js';
 
-const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-const V3 = THREE.Vector3, DEG = Math.PI / 180, FOV = 1.2, TAU = Math.PI * 2;
-const wrapPi = SM.wrapPi;
-const cap = (el, id) => { try { el.setPointerCapture(id); } catch (e) { /* تجاهل */ } };
-const numOrNull = v => { const x = parseFloat(v); return Number.isFinite(x) ? x : null; };
-const f3 = v => (v === null || v === undefined || Number.isNaN(v) ? '' : v.toFixed(3));
-const dms = SM.dms;
+const FOV = 1.2;
 
-function showErr(m) { const b = $('#err'); b.textContent = '⚠ ' + m; b.style.display = 'block'; }
-addEventListener('error', e => showErr(e.message));
-addEventListener('unhandledrejection', e => showErr(String(e.reason)));
 
 // ================= الإعدادات =================
-const raw = (() => { try { return JSON.parse(localStorage.getItem('nivoCfg') || '{}'); } catch (e) { return {}; } })();
-if (raw.start && !raw.state) { raw.legs = raw.start === 'leveled' ? 'level' : 'random'; raw.state = raw.start === 'legs' ? 'off' : raw.start; }
-const CFG = Object.assign({ legs: 'random', state: 'off', inst: 'level', err: true, errK: 1, veg: 0.5, pat: 'E', lab: 'dots', q: '1.5', ui: '0.9', seed: '', fix: false, exam: false, manual: false }, raw);
-const saveCfg = () => { try { localStorage.setItem('nivoCfg', JSON.stringify(CFG)); } catch (e) { /* تجاهل */ } };
-document.documentElement.style.setProperty('--k', CFG.ui);
 
 const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 3600);
 const scopeCam = new THREE.PerspectiveCamera(FOV, 1, 1, 400);
@@ -32,27 +19,19 @@ const elSheet = $('#sheet'), elT1 = $('#t1'), elLegs = $('#legsBox'), jogT = $('
 const mqSide = matchMedia('(min-width:760px) and (min-aspect-ratio:5/4)');
 const sideLayout = () => mqSide.matches;
 const isTT = () => I.type !== 'level';
-let scopeFull = false, focV = 0.1, eyeV = 0.95, blurFrac = 0, softFrac = 0, fine = false, lastMeas = '';
 const eyeIdeal = 0.3 + Math.random() * 0.4;
 const mapOpen = () => mapBox.style.display === 'block';
 
-let tT;
-function toast(m) { const t = $('#toast'); t.textContent = m; t.style.opacity = 1; clearTimeout(tT); tT = setTimeout(() => (t.style.opacity = 0), 2800); }
-function openTab(id) { $(`#tabs [data-t="${id}"]`).click(); }
-const cache = {};
-function setTxt(sel, v) { if (cache[sel] !== v) { cache[sel] = v; $(sel).textContent = v; } }
-function setCl(sel, v) { const k = sel + '#c'; if (cache[k] !== v) { cache[k] = v; $(sel).className = v; } }
 
 // ================= المهمة (Job) والحالة =================
-let seed = 0, job = { points: [], setups: [], cur: 0, E0: 1000, N0: 1000 }, rows = [], rowsT = [];
-const ptById = id => job.points.find(p => p.id === id);
-const setupById = id => job.setups.find(s => s.id === id);
-const trueRL = p => { const bm = job.points.find(q => q.bm && q.elev != null); return bm ? bm.elev + groundH(p.x, p.z) - groundH(bm.x, bm.z) : null; };
+const ptById = id => ST.job.points.find(p => p.id === id);
+const setupById = id => ST.job.setups.find(s => s.id === id);
+const trueRL = p => { const bm = ST.job.points.find(q => q.bm && q.elev != null); return bm ? bm.elev + groundH(p.x, p.z) - groundH(bm.x, bm.z) : null; };
 const zOf = p => { const t = trueRL(p); return t === null ? 0 : t; };
-const crd = (x, z) => ({ E: (job.E0 ?? 1000) + x, N: (job.N0 ?? 1000) - z });
-const nextId = pre => { let n = 1; while (job.points.some(p => p.id === pre + n)) n++; return pre + n; };
-const nextSetup = () => { let n = 1; while (job.setups.some(s => s.id === 'S' + n)) n++; return 'S' + n; };
-const saveState = () => { try { localStorage.setItem('nivoState', JSON.stringify({ seed, job, rows, rowsT })); } catch (e) { /* تجاهل */ } };
+const crd = (x, z) => ({ E: (ST.job.E0 ?? 1000) + x, N: (ST.job.N0 ?? 1000) - z });
+const nextId = pre => { let n = 1; while (ST.job.points.some(p => p.id === pre + n)) n++; return pre + n; };
+const nextSetup = () => { let n = 1; while (ST.job.setups.some(s => s.id === 'S' + n)) n++; return 'S' + n; };
+const saveState = () => { try { localStorage.setItem('nivoState', JSON.stringify({ seed: ST.seed, job: ST.job, rows: ST.rows, rowsT: ST.rowsT })); } catch (e) { /* تجاهل */ } };
 const loadSaved = sd => { try { const j = JSON.parse(localStorage.getItem('nivoState') || 'null'); return j && j.seed === sd && j.job && j.job.points ? j : null; } catch (e) { return null; } };
 
 function randomJob(sd) {
@@ -102,7 +81,7 @@ const DIST = () => {
 function setMode(m, d) {
   orb.mode = m; if (d) orb.tDist = d;
   $$('[data-cam]').forEach(b => b.classList.toggle('on', b.dataset.cam === m));
-  if (scopeFull) toggleFull(false);
+  if (ST.scopeFull) toggleFull(false);
 }
 $$('[data-cam]').forEach(b => (b.onclick = () => setMode(b.dataset.cam, DIST()[b.dataset.cam])));
 
@@ -190,7 +169,7 @@ $('#hSl').oninput = e => {
 };
 $('#btnLegsLock').onclick = () => { const all = I.st.legLock.every(Boolean); [0, 1, 2].forEach(i => I.setLegLock(i, !all)); updLegLabels(); };
 $('#btnLegsLevel').onclick = () => { I.levelLegsNow(); syncLegUI(); toast('تمت موازنة الأرجل'); };
-$('#btnFine').onclick = () => { fine = !fine; $('#btnFine').textContent = '🎯 ضبط دقيق: ' + (fine ? 'تشغيل' : 'إيقاف'); $('#btnFine').classList.toggle('on', fine); };
+$('#btnFine').onclick = () => { ST.fine = !ST.fine; $('#btnFine').textContent = '🎯 ضبط دقيق: ' + (ST.fine ? 'تشغيل' : 'إيقاف'); $('#btnFine').classList.toggle('on', ST.fine); };
 
 $('#btnExplode').onclick = () => {
   if (!I.st.mounted) doMount();
@@ -222,9 +201,9 @@ function applyInstType(t, quiet) {
   CFG.inst = t; saveCfg(); I.setType(t); applyErr(); document.body.dataset.inst = t;
   $('#cfgInst').value = t; $('#btnInst').textContent = '🔧 ' + I.TY().name;
   fx.setMode(t === 'ts' ? 2 : t === 'tach' ? 1 : 0); setTarget(t === 'ts' ? 'prism' : 'staff');
-  buildPartLabels(); flags.read = flags.dist = flags.two = flags.orient = flags.face2 = false; stepKey = ''; lastMeas = '';
+  buildPartLabels(); flags.read = flags.dist = flags.two = flags.orient = flags.face2 = false; ST.stepKey = ''; ST.lastMeas = '';
   const act = $('#tabs button.on'); if (act && act.offsetParent === null) openTab('t1');
-  if (!quiet) placeInstrument(job.setups[job.cur] || { id: 'S1', x: 0, z: 0 }, true);
+  if (!quiet) placeInstrument(ST.job.setups[ST.job.cur] || { id: 'S1', x: 0, z: 0 }, true);
   ttRender(); fbRender();
   if (!quiet) toast('الجهاز: ' + I.TY().name);
 }
@@ -234,14 +213,14 @@ $('#btnInst').onclick = () => { const o = ['level', 'theo', 'tach', 'ts']; apply
 function placeInstrument(s, quiet) {
   I.setRig(s.x, s.z); instPos.x = s.x; instPos.z = s.z;
   I.reset(CFG.legs, CFG.state); faceInstrument(); afterChange();
-  flags.orient = false; lastMeas = ''; stepKey = '';
+  flags.orient = false; ST.lastMeas = ''; ST.stepKey = '';
   const tri = CFG.state === 'off';
   setMode(tri ? 'tripod' : 'inst', tri ? 5.2 : 1.3); snapCam();
   if (!quiet) toast('نُقل الجهاز إلى ' + s.id + ' — أعد ضبطه');
 }
 
 function onJobChanged() {
-  setMarkers(job.points, job.setups);
+  setMarkers(ST.job.points, ST.job.setups);
   renderPtBtns(); renderMapList(); drawMap(); fbRender(); ttRender(); saveState();
 }
 
@@ -252,18 +231,17 @@ function newWorld(sd) {
     $('#loading').style.display = 'none';
   }, 40);
 }
-let mapImg = null;
 function doNewWorld(sd) {
-  seed = sd; CFG.seed = String(sd); saveCfg();
-  regen(sd); mapImg = null;
+  ST.seed = sd; CFG.seed = String(sd); saveCfg();
+  regen(sd); ST.mapImg = null;
   const sv = loadSaved(sd);
-  job = sv ? sv.job : randomJob(sd); rows = sv ? (sv.rows || []) : []; rowsT = sv ? (sv.rowsT || []) : [];
-  if (job.E0 == null) { job.E0 = 1000; job.N0 = 1000; }
-  const cur = job.setups[job.cur] || job.setups[0] || { id: 'S1', x: 0, z: 0 };
-  if (!job.setups.length) job.setups = [cur];
+  ST.job = sv ? sv.job : randomJob(sd); ST.rows = sv ? (sv.rows || []) : []; ST.rowsT = sv ? (sv.rowsT || []) : [];
+  if (ST.job.E0 == null) { ST.job.E0 = 1000; ST.job.N0 = 1000; }
+  const cur = ST.job.setups[ST.job.cur] || ST.job.setups[0] || { id: 'S1', x: 0, z: 0 };
+  if (!ST.job.setups.length) ST.job.setups = [cur];
   I.setRig(cur.x, cur.z); instPos.x = cur.x; instPos.z = cur.z;
   I.reset(CFG.legs, CFG.state);
-  const first = job.points.find(p => p.bm) || job.points[0];
+  const first = ST.job.points.find(p => p.bm) || ST.job.points[0];
   if (first) placeHolderAt(first);
   $('#cfgSeed').value = sd; setTxt('#seedLbl', String(sd)); setTxt('#mapSeed', String(sd));
   applyInstType(CFG.inst, true);
@@ -275,9 +253,9 @@ function doNewWorld(sd) {
 const randSeed = () => Math.floor(Math.random() * 899999) + 100000;
 
 function newJob() {
-  job = randomJob(randSeed()); rows = []; rowsT = [];
-  placeInstrument(job.setups[0], true);
-  const first = job.points.find(p => p.bm) || job.points[0];
+  ST.job = randomJob(randSeed()); ST.rows = []; ST.rowsT = [];
+  placeInstrument(ST.job.setups[0], true);
+  const first = ST.job.points.find(p => p.bm) || ST.job.points[0];
   if (first) placeHolderAt(first);
   onJobChanged(); toast('مهمة جديدة على نفس العالم');
 }
@@ -303,16 +281,16 @@ $('#btnWorldRnd').onclick = () => newWorld(randSeed());
 // NIVO-V8
 function drawMap() {
   if (!mapOpen()) return;
-  if (!mapImg) mapImg = mapImage(HALF, 320);
+  if (!ST.mapImg) ST.mapImg = mapImage(HALF, 320);
   const c = mctx, k = MS / (2 * HALF);
-  c.clearRect(0, 0, MS, MS); c.imageSmoothingEnabled = true; c.drawImage(mapImg.canvas, 0, 0, MS, MS);
+  c.clearRect(0, 0, MS, MS); c.imageSmoothingEnabled = true; c.drawImage(ST.mapImg.canvas, 0, 0, MS, MS);
   c.lineWidth = 1; c.strokeStyle = 'rgba(255,255,255,.2)'; c.fillStyle = 'rgba(255,255,255,.75)'; c.font = '10px sans-serif'; c.textAlign = 'left';
   for (let g = -Math.floor(HALF / 100) * 100; g <= HALF; g += 100) {
     const gx = w2m(g, 0)[0], gy = w2m(0, g)[1];
     c.beginPath(); c.moveTo(gx, 0); c.lineTo(gx, MS); c.moveTo(0, gy); c.lineTo(MS, gy); c.stroke();
     c.fillText(String(g), gx + 2, MS - 3); c.fillText(String(g), 2, gy - 2);
   }
-  c.fillStyle = '#fff'; c.font = 'bold 12px sans-serif'; c.fillText('N ↑  كنتور ' + mapImg.iv + ' م', MS - 92, 14);
+  c.fillStyle = '#fff'; c.font = 'bold 12px sans-serif'; c.fillText('N ↑  كنتور ' + ST.mapImg.iv + ' م', MS - 92, 14);
   const label = (t, x, y, col) => { c.font = 'bold 12px sans-serif'; c.lineWidth = 3; c.strokeStyle = '#000'; c.strokeText(t, x + 8, y - 6); c.fillStyle = col; c.fillText(t, x + 8, y - 6); };
   // معالم: أسهم جريان النهر + الجسر + المباني
   const rp = riverPath();
@@ -332,14 +310,14 @@ function drawMap() {
   });
   const [ix, iy] = w2m(instPos.x, instPos.z), gp = holder.group.position, [hx, hy] = w2m(gp.x, gp.z);
   c.setLineDash([5, 4]); c.strokeStyle = 'rgba(255,150,40,.9)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(ix, iy); c.lineTo(hx, hy); c.stroke(); c.setLineDash([]);
-  job.setups.forEach((s, i) => {
-    const [x, y] = w2m(s.x, s.z), cur = i === job.cur, r = cur ? 9 : 6;
+  ST.job.setups.forEach((s, i) => {
+    const [x, y] = w2m(s.x, s.z), cur = i === ST.job.cur, r = cur ? 9 : 6;
     c.fillStyle = cur ? '#4dabf7' : 'rgba(77,171,247,.6)'; c.strokeStyle = '#fff'; c.lineWidth = 1.5;
     c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y); c.closePath(); c.fill(); c.stroke();
     label(s.id, x, y, '#9fd0ff');
     if (s.locked) { c.font = '12px sans-serif'; c.fillText('📌', x + 4, y + 16); }
   });
-  job.points.forEach(p => {
+  ST.job.points.forEach(p => {
     const [x, y] = w2m(p.x, p.z);
     c.lineWidth = 1.5; c.strokeStyle = '#fff';
     if (p.bm) { c.fillStyle = '#2ea043'; c.beginPath(); c.moveTo(x, y - 8); c.lineTo(x + 8, y + 6); c.lineTo(x - 8, y + 6); c.closePath(); c.fill(); c.stroke(); }
@@ -358,13 +336,13 @@ function reach(p) {
 function renderMapList() {
   if (!mapOpen()) return;
   const out = [];
-  job.points.forEach(p => {
+  ST.job.points.forEach(p => {
     const rc2 = reach(p), c = crd(p.x, p.z), wet = wetness(p.x, p.z) > 0.35;
     out.push(`<div class="mrow"><span class="mi ${p.bm ? 'bm' : 'pt'}">${p.bm ? '▲' : '●'}</span><b>${p.id}</b>${p.locked ? '<span>📌</span>' : ''}<span class="mx">${p.bm ? `E ${c.E.toFixed(0)} N ${c.N.toFixed(0)}` : `${p.x}, ${p.z}`}</span>${p.bm ? `<input type="number" step="0.001" data-act="elev" data-id="${p.id}" value="${p.elev ?? ''}" placeholder="RL">` : ''}${wet ? '<span class="warn">💧 ضفة: أرض طرية</span>' : ''}<span class="${rc2.ok ? 'ok' : 'warn'}">${rc2.d.toFixed(0)} م ${rc2.ok ? '✓ ضمن المدى' : '⚠ خارج المدى'}</span><button data-act="staff" data-id="${p.id}">👷</button><button data-act="pin" data-id="${p.id}">${p.locked ? '🔓' : '📌'}</button><button data-act="del" data-id="${p.id}">🗑</button></div>`);
   });
-  job.setups.forEach((s, i) => {
+  ST.job.setups.forEach((s, i) => {
     const c = crd(s.x, s.z), wet = wetness(s.x, s.z) > 0.35;
-    out.push(`<div class="mrow"><span class="mi st">◆</span><b>${s.id}</b>${s.locked ? '<span>📌</span>' : ''}<span class="mx">E ${c.E.toFixed(0)} N ${c.N.toFixed(0)}</span>${i === job.cur ? '<span class="ok">الحالي</span>' : ''}${wet ? '<span class="warn">💧 أرض طرية</span>' : ''}<button data-act="goto" data-id="${s.id}">🔭</button><button data-act="pin" data-id="${s.id}">${s.locked ? '🔓' : '📌'}</button><button data-act="delS" data-id="${s.id}">🗑</button></div>`);
+    out.push(`<div class="mrow"><span class="mi st">◆</span><b>${s.id}</b>${s.locked ? '<span>📌</span>' : ''}<span class="mx">E ${c.E.toFixed(0)} N ${c.N.toFixed(0)}</span>${i === ST.job.cur ? '<span class="ok">الحالي</span>' : ''}${wet ? '<span class="warn">💧 أرض طرية</span>' : ''}<button data-act="goto" data-id="${s.id}">🔭</button><button data-act="pin" data-id="${s.id}">${s.locked ? '🔓' : '📌'}</button><button data-act="delS" data-id="${s.id}">🗑</button></div>`);
   });
   $('#mapList').innerHTML = out.join('');
 }
@@ -376,17 +354,17 @@ function sendStaff(p) {
 }
 function delPoint(p) {
   if (p.locked) return toast('📌 النقطة مثبّتة: ألغِ التثبيت أولاً');
-  job.points = job.points.filter(q => q !== p);
+  ST.job.points = ST.job.points.filter(q => q !== p);
   if (holder.station && holder.station.id === p.id) holder.station = null;
   onJobChanged();
 }
 function delSetup(s) {
   if (s.locked) return toast('📌 الموضع مثبّت: ألغِ التثبيت أولاً');
-  if (job.setups[job.cur] === s) return toast('لا يمكن حذف موضع الجهاز الحالي');
-  const cur = job.setups[job.cur]; job.setups = job.setups.filter(q => q !== s); job.cur = job.setups.indexOf(cur);
+  if (ST.job.setups[ST.job.cur] === s) return toast('لا يمكن حذف موضع الجهاز الحالي');
+  const cur = ST.job.setups[ST.job.cur]; ST.job.setups = ST.job.setups.filter(q => q !== s); ST.job.cur = ST.job.setups.indexOf(cur);
   onJobChanged();
 }
-function gotoSetup(s) { job.cur = job.setups.indexOf(s); placeInstrument(s); onJobChanged(); }
+function gotoSetup(s) { ST.job.cur = ST.job.setups.indexOf(s); placeInstrument(s); onJobChanged(); }
 
 $('#mapList').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -408,7 +386,7 @@ $('#mapList').addEventListener('change', e => {
 const m2w = e => { const r = mapC.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * 2 * HALF - HALF, (e.clientY - r.top) / r.height * 2 * HALF - HALF]; };
 const nearOf = (arr, x, z, rad) => { let b = null, bd = rad; arr.forEach(q => { const d = Math.hypot(q.x - x, q.z - z); if (d < bd) { bd = d; b = q; } }); return b; };
 const nearAny = (x, z, rad) => {
-  const a = nearOf(job.points, x, z, rad), b = nearOf(job.setups, x, z, rad);
+  const a = nearOf(ST.job.points, x, z, rad), b = nearOf(ST.job.setups, x, z, rad);
   if (!a) return b; if (!b) return a;
   return Math.hypot(a.x - x, a.z - z) <= Math.hypot(b.x - x, b.z - z) ? a : b;
 };
@@ -435,7 +413,7 @@ const endDrag = () => {
   const d = mdrag, t = d.t; mdrag = null;
   if (t.x === d.x0 && t.z === d.z0) return;
   if ('bm' in t) { if (holder.station && holder.station.id === t.id) placeHolderAt(t); toast('نُقلت ' + t.id + ' — أي قراءات سابقة عليها لم تعد صالحة'); }
-  else if (job.setups[job.cur] === t) { placeInstrument(t, true); toast('نُقل الجهاز إلى ' + t.id + ' وأُعيد ضبطه'); }
+  else if (ST.job.setups[ST.job.cur] === t) { placeInstrument(t, true); toast('نُقل الجهاز إلى ' + t.id + ' وأُعيد ضبطه'); }
   onJobChanged();
 };
 mapC.addEventListener('pointerup', endDrag); mapC.addEventListener('pointercancel', endDrag);
@@ -444,18 +422,18 @@ function mapTap(x, z) {
   x = Math.round(clamp(x, -(HALF - 4), HALF - 4)); z = Math.round(clamp(z, -(HALF - 4), HALF - 4));
   if (mapTool === 'pt' || mapTool === 'bm') {
     if (isWater(x, z)) return toast('💧 لا يمكن وضع نقطة داخل الماء');
-    if (nearOf(job.points, x, z, 4)) return toast('قريبة جداً من نقطة أخرى');
+    if (nearOf(ST.job.points, x, z, 4)) return toast('قريبة جداً من نقطة أخرى');
     const bm = mapTool === 'bm', p = { id: nextId(bm ? 'BM' : 'P'), x, z, bm, elev: null };
     if (bm) { const t = trueRL({ x, z }); p.elev = t === null ? 100 : Math.round(t * 1000) / 1000; }
-    job.points.push(p); onJobChanged();
+    ST.job.points.push(p); onJobChanged();
   } else if (mapTool === 'inst') {
     if (isWater(x, z)) return toast('💧 لا يمكن وضع الجهاز داخل الماء (ضعه على الضفة أو الجسر)');
     if (inHouse(x, z)) return toast('🏠 لا يمكن وضع الجهاز داخل مبنى');
-    const s0 = nearOf(job.setups, x, z, 6 * MZ);
+    const s0 = nearOf(ST.job.setups, x, z, 6 * MZ);
     if (s0) gotoSetup(s0);
-    else { const s = { id: nextSetup(), x, z }; job.setups.push(s); gotoSetup(s); }
+    else { const s = { id: nextSetup(), x, z }; ST.job.setups.push(s); gotoSetup(s); }
   } else if (mapTool === 'staff') {
-    const p = nearOf(job.points, x, z, 10 * MZ); if (p) sendStaff(p); else toast('المس قرب نقطة لإرسال الهدف إليها');
+    const p = nearOf(ST.job.points, x, z, 10 * MZ); if (p) sendStaff(p); else toast('المس قرب نقطة لإرسال الهدف إليها');
   } else if (mapTool === 'del') {
     const t = nearAny(x, z, 6 * MZ);
     if (!t) toast('لا توجد نقطة هنا'); else if ('bm' in t) delPoint(t); else delSetup(t);
@@ -467,9 +445,9 @@ function mapTap(x, z) {
 }
 function renderPtBtns() {
   const box = $('#ptBtns'); box.innerHTML = '';
-  job.points.forEach(p => { const b = document.createElement('button'); b.textContent = p.id; b.dataset.id = p.id; b.onclick = () => sendStaff(p); box.appendChild(b); });
+  ST.job.points.forEach(p => { const b = document.createElement('button'); b.textContent = p.id; b.dataset.id = p.id; b.onclick = () => sendStaff(p); box.appendChild(b); });
   const sel = $('#bsSel'), old = sel.value;
-  sel.innerHTML = job.points.filter(p => p.bm).map(p => `<option value="${p.id}">BS: ${p.id}</option>`).join('');
+  sel.innerHTML = ST.job.points.filter(p => p.bm).map(p => `<option value="${p.id}">BS: ${p.id}</option>`).join('');
   if (old) sel.value = old;
 }
 
@@ -489,19 +467,19 @@ $('#cfgManual').onchange = e => { CFG.manual = e.target.checked; saveCfg(); fbRe
 $('#cfgExam').onchange = e => { CFG.exam = e.target.checked; saveCfg(); fbRender(); ttRender(); };
 $('#btnSeedApply').onclick = () => { const v = Math.floor(+$('#cfgSeed').value); if (!(v > 0)) return toast('اكتب رقماً صحيحاً أكبر من 0'); newWorld(v); };
 $('#btnSeedRnd').onclick = () => newWorld(randSeed());
-$('#btnRestart').onclick = () => { placeInstrument(job.setups[job.cur] || { x: 0, z: 0, id: 'S1' }, true); toast('تمت إعادة ضبط الجهاز'); };
+$('#btnRestart').onclick = () => { placeInstrument(ST.job.setups[ST.job.cur] || { x: 0, z: 0, id: 'S1' }, true); toast('تمت إعادة ضبط الجهاز'); };
 $('#btnLegsLevel2').onclick = $('#btnLegsLevel').onclick;
 $('#btnScrewsNow').onclick = () => { if (!I.st.mounted) doMount(); I.levelScrewsNow(); toast('تمت موازنة البراغي'); };
 
 // ---- أخطاء الجهاز ----
 $('#cfgErr').checked = !!CFG.err; $('#cfgErrK').value = String(CFG.errK);
-const applyErr = () => { I.setErrors(CFG.err, +CFG.errK, seed); setStaffZero(I.staffZero()); };
+const applyErr = () => { I.setErrors(CFG.err, +CFG.errK, ST.seed); setStaffZero(I.staffZero()); };
 $('#cfgErr').onchange = e => { CFG.err = e.target.checked; saveCfg(); applyErr(); ttRefresh(); toast(CFG.err ? 'أخطاء الجهاز: تشغيل' : 'أخطاء الجهاز: إيقاف'); };
 $('#cfgErrK').onchange = e => { CFG.errK = +e.target.value; saveCfg(); applyErr(); toast('حجم الأخطاء ×' + CFG.errK); };
 $('#btnErrShow').onclick = () => { $('#errInfo').textContent = I.errReport().join('\n'); };
 
 $('#cfgVeg').value = String(CFG.veg);
-$('#cfgVeg').onchange = e => { CFG.veg = +e.target.value; saveCfg(); setVegDensity(CFG.veg); newWorld(seed); toast('كثافة الأشجار: ' + e.target.selectedOptions[0].text); };
+$('#cfgVeg').onchange = e => { CFG.veg = +e.target.value; saveCfg(); setVegDensity(CFG.veg); newWorld(ST.seed); toast('كثافة الأشجار: ' + e.target.selectedOptions[0].text); };
 
 async function lanRefresh(tries = 4) {
   for (let i = 0; i < tries; i++) {
@@ -605,13 +583,13 @@ lv.addEventListener('pointermove', e => {
   const p = lvPos(e), a = Math.atan2(p.y - KN[d.i].y, p.x - KN[d.i].x);
   const da = wrapPi(a - d.a); d.a = a;
   if (!Number.isFinite(da)) return;
-  if (!I.turnScrew(d.i, da / TAU * (fine ? 0.1 : 1))) toast('وصل البرغي نهاية مداه — أعِد باقي البراغي لمنتصف مداها');
+  if (!I.turnScrew(d.i, da / TAU * (ST.fine ? 0.1 : 1))) toast('وصل البرغي نهاية مداه — أعِد باقي البراغي لمنتصف مداها');
 });
 const dEnd = e => drag.delete(e.pointerId); lv.addEventListener('pointerup', dEnd); lv.addEventListener('pointercancel', dEnd);
 $$('[data-sc]').forEach(b => (b.onclick = () => {
   if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
   const [i, d] = b.dataset.sc.split(',');
-  if (!I.turnScrew(+i, +d * (fine ? 1 / 40 : 0.125))) toast('وصل البرغي نهاية مداه');
+  if (!I.turnScrew(+i, +d * (ST.fine ? 1 / 40 : 0.125))) toast('وصل البرغي نهاية مداه');
 }));
 
 // ================= التوجيه (دوران أفقي لا نهائي + رأسي) =================
@@ -655,16 +633,15 @@ $('#btnAim').onclick = () => {
   toast(rc2 && !rc2.ok ? 'تنبيه: هذه النقطة خارج المدى من هذا الموضع — انقل الجهاز' : 'تم التوجيه التقريبي. اربط المثبّت ثم أتقن بالحركة البطيئة');
 };
 
-let slow = 0, slowT = 0, slowV = 0, slowVT = 0;
 [['slL', -1], ['slR', 1]].forEach(([id, dir]) => {
   const b = $('#' + id); b.oncontextmenu = e => e.preventDefault();
   b.addEventListener('pointerdown', e => {
     if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
     if (!I.st.clamp) return toast('اربط المثبّت أولاً لتفعيل الحركة البطيئة');
     cap(b, e.pointerId);
-    setHeading(I.st.heading + dir * 0.01 * DEG); slow = dir; slowT = 0;
+    setHeading(I.st.heading + dir * 0.01 * DEG); ST.slow = dir; ST.slowT = 0;
   });
-  const stop = () => { slow = 0; };
+  const stop = () => { ST.slow = 0; };
   b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop); b.addEventListener('lostpointercapture', stop);
 });
 [['slU', -1], ['slD', 1]].forEach(([id, dir]) => {
@@ -673,35 +650,35 @@ let slow = 0, slowT = 0, slowV = 0, slowVT = 0;
     if (!I.st.mounted) return toast('ركّب الجهاز أولاً');
     if (!I.st.clampV) return toast('اربط المثبّت الرأسي أولاً');
     cap(b, e.pointerId);
-    setVz(I.st.vz + dir * 0.01 * DEG); slowV = dir; slowVT = 0;
+    setVz(I.st.vz + dir * 0.01 * DEG); ST.slowV = dir; ST.slowVT = 0;
   });
-  const stop = () => { slowV = 0; };
+  const stop = () => { ST.slowV = 0; };
   b.addEventListener('pointerup', stop); b.addEventListener('pointercancel', stop); b.addEventListener('lostpointercapture', stop);
 });
 let keyDir = 0;
 addEventListener('keydown', e => {
-  if (e.key === 'Escape') { if (mapOpen()) closeMap(); else if (scopeFull) toggleFull(false); return; }
+  if (e.key === 'Escape') { if (mapOpen()) closeMap(); else if (ST.scopeFull) toggleFull(false); return; }
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
   e.preventDefault();
   if (e.repeat || !I.st.mounted) return;
   if (!I.st.clamp) return toast('اربط المثبّت لاستعمال الحركة البطيئة');
-  keyDir = e.key === 'ArrowRight' ? 1 : -1; slow = keyDir; slowT = 0; setHeading(I.st.heading + keyDir * 0.01 * DEG);
+  keyDir = e.key === 'ArrowRight' ? 1 : -1; ST.slow = keyDir; ST.slowT = 0; setHeading(I.st.heading + keyDir * 0.01 * DEG);
 });
-addEventListener('keyup', e => { if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && keyDir) { keyDir = 0; slow = 0; } });
+addEventListener('keyup', e => { if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && keyDir) { keyDir = 0; ST.slow = 0; } });
 
-$('#foc').oninput = e => (focV = +e.target.value);
-$('#eye').oninput = e => (eyeV = +e.target.value);
+$('#foc').oninput = e => (ST.focV = +e.target.value);
+$('#eye').oninput = e => (ST.eyeV = +e.target.value);
 
 function toggleFull(on) {
-  scopeFull = on; scopeEl.classList.toggle('full', on);
+  ST.scopeFull = on; scopeEl.classList.toggle('full', on);
   $('#btnExit').style.display = on ? 'block' : 'none';
   if (on) openTab('t2');
 }
 $('#btnFull').onclick = () => { if (!I.st.mounted) return toast('ركّب الجهاز أولاً'); toggleFull(true); };
 $('#btnExit').onclick = () => toggleFull(false);
 let sd = null;
-scopeEl.addEventListener('pointerdown', e => { if (!scopeFull) { toggleFull(true); return; } sd = { x: e.clientX, y: e.clientY }; cap(scopeEl, e.pointerId); });
+scopeEl.addEventListener('pointerdown', e => { if (!ST.scopeFull) { toggleFull(true); return; } sd = { x: e.clientX, y: e.clientY }; cap(scopeEl, e.pointerId); });
 scopeEl.addEventListener('pointermove', e => {
   if (!sd) return;
   const dx = e.clientX - sd.x, dy = e.clientY - sd.y, w = scopeEl.getBoundingClientRect().width || 300; sd.x = e.clientX; sd.y = e.clientY;
@@ -729,7 +706,6 @@ $('#inHr').oninput = e => { const v = numOrNull(e.target.value); if (v !== null)
 
 // ================= النظر في الهدف =================
 const rc = new THREE.Raycaster(), _o = new V3(), _d = new V3(), _r = new V3(), _p = new V3(), _t = new V3();
-let S = { hit: false, dist: 70, ang: 9 };
 function sightInfo() {
   const s = { hit: false, dist: 70, ang: 9 };
   if (!I.st.mounted || holder.walking) return s;
@@ -806,10 +782,9 @@ const STEPS_C = [...S_COMMON,
   ['two', 'سجّل نقطتين مختلفتين وقارن الزاوية الأفقية بينهما', 'استعمل «0SET» على المرجع ثم وجّه إلى النقطة الثانية. يعرض تبويب 📐 الزاوية والخطأ.']
 ];
 const curSteps = () => ({ level: STEPS_L, theo: STEPS_T, tach: STEPS_C, ts: STEPS_S })[I.type];
-let stepKey = '';
 function renderSteps() {
   const st = curSteps(), k = I.type + st.map(s => (flags[s[0]] ? 1 : 0)).join('');
-  if (k === stepKey) return; stepKey = k;
+  if (k === ST.stepKey) return; ST.stepKey = k;
   $('#steps').innerHTML = st.map((s, i) => `<div class="st ${flags[s[0]] ? 'done' : ''}">${flags[s[0]] ? '✅' : '⬜'} ${i + 1}. ${s[1]}</div>`).join('');
 }
 $('#btnHint').onclick = () => { const s = curSteps().find(q => !flags[q[0]]); $('#hint').textContent = s ? '💡 ' + s[2] : '🎉 أكملت كل الخطوات!'; };
@@ -820,7 +795,7 @@ const newRow = pt => ({ pt, bs: null, is: null, fs: null, uhi: null, url: null, 
 
 function fbCompute() {
   let HI = null; const rlMap = {}, out = [];
-  rows.forEach(r => {
+  ST.rows.forEach(r => {
     const p = ptById(r.pt), known = p && p.bm && p.elev != null ? p.elev : null;
     const sight = r.fs != null ? r.fs : r.is != null ? r.is : null;
     const o = { rl: null, hi: null, calc: null, miscl: null, tru: p ? trueRL(p) : null, err: null };
@@ -839,7 +814,7 @@ function fbCompute() {
 
 function fbSummary(comp) {
   let F = -1, L = -1;
-  rows.forEach((r, i) => {
+  ST.rows.forEach((r, i) => {
     const p = ptById(r.pt);
     if (F < 0 && r.bs != null && comp[i].rl !== null && p && p.bm) F = i;
     if (r.fs != null && comp[i].calc !== null) L = i;
@@ -848,7 +823,7 @@ function fbSummary(comp) {
   if (F < 0 || L < F) { lines.push('أضف BS على نقطة BM ثم FS على نقطة لاحقة لتظهر فحوص الحساب والإغلاق.'); return lines; }
   let sb = 0, sf = 0, dist = 0;
   for (let i = 0; i <= L; i++) {
-    const r = rows[i];
+    const r = ST.rows[i];
     if (r.bs != null && i !== L) sb += r.bs;
     if (r.fs != null) sf += r.fs;
     if (r.d) { if (i !== L && r.d.bs) dist += r.d.bs; if (r.d.fs) dist += r.d.fs; }
@@ -865,9 +840,9 @@ function fbSummary(comp) {
 
 function fbRender() {
   const comp = fbCompute(), showErr_ = !CFG.exam;
-  const opts = pt => ['<option value=""></option>'].concat(job.points.map(p => `<option value="${p.id}"${p.id === pt ? ' selected' : ''}>${p.id}</option>`)).concat(pt && !ptById(pt) ? [`<option value="${pt}" selected>${pt}</option>`] : []).join('');
+  const opts = pt => ['<option value=""></option>'].concat(ST.job.points.map(p => `<option value="${p.id}"${p.id === pt ? ' selected' : ''}>${p.id}</option>`)).concat(pt && !ptById(pt) ? [`<option value="${pt}" selected>${pt}</option>`] : []).join('');
   let h = `<thead><tr><th>#</th><th>النقطة</th><th>BS</th><th>IS</th><th>FS</th><th>HI</th><th>RL</th><th>ملاحظات</th>${showErr_ ? '<th>±مم</th>' : ''}</tr></thead><tbody>`;
-  rows.forEach((r, i) => {
+  ST.rows.forEach((r, i) => {
     const num = f => `<input class="fn" type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="${f}" value="${r[f] ?? ''}">`;
     const hiCell = CFG.manual ? `<td><input type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="uhi" value="${r.uhi ?? ''}"></td>` : `<td class="calc" data-c="hi${i}"></td>`;
     const rlCell = CFG.manual ? `<td><input type="number" step="0.001" inputmode="decimal" data-r="${i}" data-f="url" value="${r.url ?? ''}"></td>` : `<td class="calc" data-c="rl${i}"></td>`;
@@ -879,7 +854,7 @@ function fbRender() {
 
 function fbRefresh() {
   const comp = fbCompute();
-  rows.forEach((r, i) => {
+  ST.rows.forEach((r, i) => {
     const o = comp[i];
     ['bs', 'is', 'fs'].forEach(f => {
       const el = fbRoot.querySelector(`[data-r="${i}"][data-f="${f}"]`); if (!el) return;
@@ -900,36 +875,36 @@ function fbRefresh() {
     const er = fbRoot.querySelector(`[data-c="er${i}"]`);
     if (er) { er.textContent = o.err === null ? '' : (o.err >= 0 ? '+' : '') + o.err.toFixed(0); er.style.color = o.err === null ? '' : Math.abs(o.err) <= 10 ? '#7ee787' : '#ff7b72'; }
   });
-  $('#fbSum').textContent = rows.length ? fbSummary(comp).join('\n') : 'الدفتر فارغ. أضف قراءة من تبويب المسح (➕ للدفتر) أو أضف صفاً يدوياً.';
+  $('#fbSum').textContent = ST.rows.length ? fbSummary(comp).join('\n') : 'الدفتر فارغ. أضف قراءة من تبويب المسح (➕ للدفتر) أو أضف صفاً يدوياً.';
 }
 
 ['input', 'change'].forEach(ev => fbRoot.addEventListener(ev, e => {
   const t = e.target, i = +t.dataset.r, f = t.dataset.f;
-  if (isNaN(i) || !f || !rows[i]) return;
-  const r = rows[i];
+  if (isNaN(i) || !f || !ST.rows[i]) return;
+  const r = ST.rows[i];
   if (f === 'pt') r.pt = t.value; else if (f === 'rem') r.rem = t.value; else r[f] = numOrNull(t.value);
   fbRefresh(); saveState();
 }));
-$('#btnAddRow').onclick = () => { rows.push(newRow(holder.station ? holder.station.id : '')); fbRender(); saveState(); };
-$('#btnDelRow').onclick = () => { rows.pop(); fbRender(); saveState(); };
-$('#btnClearFb').onclick = () => { if (!rows.length || confirm('مسح كل صفوف الدفتر؟')) { rows = []; fbRender(); saveState(); $('#evalBox').textContent = ''; } };
+$('#btnAddRow').onclick = () => { ST.rows.push(newRow(holder.station ? holder.station.id : '')); fbRender(); saveState(); };
+$('#btnDelRow').onclick = () => { ST.rows.pop(); fbRender(); saveState(); };
+$('#btnClearFb').onclick = () => { if (!ST.rows.length || confirm('مسح كل صفوف الدفتر؟')) { ST.rows = []; fbRender(); saveState(); $('#evalBox').textContent = ''; } };
 
 $('#btnEval').onclick = () => {
   const comp = fbCompute(), finals = {}, lines = [];
-  rows.forEach((r, i) => { const p = ptById(r.pt), o = comp[i]; if (p && !p.bm && o.rl !== null && o.calc !== null && o.err !== null) finals[p.id] = { rl: o.rl, err: o.err }; });
-  job.points.filter(p => !p.bm).forEach(p => {
+  ST.rows.forEach((r, i) => { const p = ptById(r.pt), o = comp[i]; if (p && !p.bm && o.rl !== null && o.calc !== null && o.err !== null) finals[p.id] = { rl: o.rl, err: o.err }; });
+  ST.job.points.filter(p => !p.bm).forEach(p => {
     const f = finals[p.id];
     lines.push(f ? `${p.id}: RL = ${f.rl.toFixed(3)} م | الخطأ ${f.err >= 0 ? '+' : ''}${f.err.toFixed(0)} مم ${Math.abs(f.err) <= 10 ? '✓' : '✗'}` : `${p.id}: لم تُقَس بعد`);
   });
   lines.push(''); fbSummary(comp).forEach(l => lines.push(l));
   const errs = Object.values(finals).map(f => f.err);
-  if (errs.length) lines.push(`عدد النقاط المقاسة ${errs.length}/${job.points.filter(p => !p.bm).length} | أكبر خطأ ${Math.max(...errs.map(Math.abs)).toFixed(0)} مم`);
+  if (errs.length) lines.push(`عدد النقاط المقاسة ${errs.length}/${ST.job.points.filter(p => !p.bm).length} | أكبر خطأ ${Math.max(...errs.map(Math.abs)).toFixed(0)} مم`);
   $('#evalBox').textContent = lines.join('\n');
 };
 
 $('#btnCsv').onclick = async () => {
   const comp = fbCompute(), lines = ['Point,BS,IS,FS,HI,RL,Remarks'];
-  rows.forEach((r, i) => lines.push([r.pt, f3(r.bs), f3(r.is), f3(r.fs), f3(comp[i].hi), f3(comp[i].rl), '"' + (r.rem || '').replace(/"/g, '""') + '"'].join(',')));
+  ST.rows.forEach((r, i) => lines.push([r.pt, f3(r.bs), f3(r.is), f3(r.fs), f3(comp[i].hi), f3(comp[i].rl), '"' + (r.rem || '').replace(/"/g, '""') + '"'].join(',')));
   const t = lines.join('\n');
   try { await navigator.clipboard.writeText(t); toast('نُسخ الجدول (CSV)'); }
   catch (e) { const b = $('#csvBox'); b.style.display = 'block'; b.value = t; b.select(); toast('انسخ النص من الخانة'); }
@@ -940,21 +915,21 @@ function say(t, c) { const m = $('#readMsg'); m.textContent = t; m.className = '
 $('#btnRead').onclick = () => {
   const kind = $('#rdType').value, v = parseFloat($('#inRead').value);
   if (isNaN(v)) return say('اكتب القراءة بالمتر، مثل 1.423', 'warn');
-  if (!I.st.mounted || holder.walking || !S.hit || !holder.station) return say('الشعيرة الأفقية ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (!I.st.mounted || holder.walking || !ST.S.hit || !holder.station) return say('الشعيرة الأفقية ليست على الميرا. وجّه المنظار أولاً.', 'warn');
   if (I.getTilt().arc > I.TY().comp) return say('الجهاز غير مسوّى (خارج مدى المعوّض) — القراءة غير معتمدة. سوِّه أولاً.', 'bad');
   const p = holder.station;
-  let r = rows[rows.length - 1];
+  let r = ST.rows[ST.rows.length - 1];
   const reuse = r && r.pt === p.id && (kind === 'bs' || (kind === 'fs' ? r.is == null : r.fs == null));
-  if (!reuse) { r = newRow(p.id); rows.push(r); }
-  r[kind] = v; r.tr[kind] = S.reading; r.d[kind] = S.dist;
-  const ad = Math.abs(v - S.reading) * 1000;
+  if (!reuse) { r = newRow(p.id); ST.rows.push(r); }
+  r[kind] = v; r.tr[kind] = ST.S.reading; r.d[kind] = ST.S.dist;
+  const ad = Math.abs(v - ST.S.reading) * 1000;
   let msg = `✓ أُضيفت ${KN_NAME[kind]} عند ${p.id}`, cls = 'ok';
   if (!CFG.exam) { msg += ad <= 3 ? ` — دقيقة (فارق ${ad.toFixed(1)} مم)` : ad <= 10 ? ` — قريبة (فارق ${ad.toFixed(0)} مم)` : ` — بعيدة! فارق ${ad.toFixed(0)} مم`; cls = ad <= 3 ? 'ok' : ad <= 10 ? 'warn' : 'bad'; }
   const dv = parseFloat($('#inDist').value);
-  if (!isNaN(dv) && S.D) { if (Math.abs(dv - S.D) <= 0.8) { flags.dist = true; msg += ` | المسافة صحيحة (${S.D.toFixed(1)} م)`; } else msg += ` | المسافة الصحيحة ≈ ${S.D.toFixed(1)} م`; }
+  if (!isNaN(dv) && ST.S.D) { if (Math.abs(dv - ST.S.D) <= 0.8) { flags.dist = true; msg += ` | المسافة صحيحة (${ST.S.D.toFixed(1)} م)`; } else msg += ` | المسافة الصحيحة ≈ ${ST.S.D.toFixed(1)} م`; }
   flags.read = true;
-  flags.two = new Set(rows.filter(q => q.bs != null || q.is != null || q.fs != null).map(q => q.pt)).size >= 2;
-  stepKey = ''; $('#inRead').value = '';
+  flags.two = new Set(ST.rows.filter(q => q.bs != null || q.is != null || q.fs != null).map(q => q.pt)).size >= 2;
+  ST.stepKey = ''; $('#inRead').value = '';
   say(msg, cls); fbRender(); saveState();
 };
 
@@ -963,7 +938,7 @@ $('#btnRead').onclick = () => {
 const SEC = DEG / 3600;
 const ttRoot = $('#tt');
 const isStad = () => I.type === 'theo' || I.type === 'tach';
-const kindRows = () => rowsT.map((r, i) => [r, i]).filter(([r]) => r.k === I.type);
+const kindRows = () => ST.rowsT.map((r, i) => [r, i]).filter(([r]) => r.k === I.type);
 
 function ttCalc(r) {
   const su = setupById(r.su), p = ptById(r.pt), o = {};
@@ -985,7 +960,7 @@ function ttCalc(r) {
 
 function ttRender() {
   const kind = I.type, exam = CFG.exam;
-  const opts = pt => ['<option value=""></option>'].concat(job.points.map(p => `<option value="${p.id}"${p.id === pt ? ' selected' : ''}>${p.id}</option>`)).concat(pt && !ptById(pt) ? [`<option value="${pt}" selected>${pt}</option>`] : []).join('');
+  const opts = pt => ['<option value=""></option>'].concat(ST.job.points.map(p => `<option value="${p.id}"${p.id === pt ? ' selected' : ''}>${p.id}</option>`)).concat(pt && !ptById(pt) ? [`<option value="${pt}" selected>${pt}</option>`] : []).join('');
   const cols = kind === 'tach' ? ['#', 'النقطة', 'Hz', 'V', 'وجه', 'ق ع', 'ق و', 'ق س', 'K', 'S', 'D م', 'ΔH م', 'Z م'].concat(exam ? [] : ['±D سم', '±Z مم'])
     : kind === 'theo' ? ['#', 'النقطة', 'Hz', 'V', 'وجه', 'U', 'M', 'L', 'D م', 'Z م'].concat(exam ? [] : ['±D سم', '±Z مم'])
     : ['#', 'النقطة', 'Hz', 'V', 'وجه', 'SD', 'hr', 'HD', 'VD', 'N', 'E', 'Z'].concat(exam ? [] : ['±N مم', '±E مم', '±Z مم']);
@@ -1020,7 +995,7 @@ function ttRefresh() {
 }
 
 function ttSummary(reveal) {
-  const rr = rowsT.filter(r => r.k === I.type), lines = [], show = reveal || !CFG.exam;
+  const rr = ST.rowsT.filter(r => r.k === I.type), lines = [], show = reveal || !CFG.exam;
   if (!rr.length) return ['لا توجد قياسات بعد. ' + (I.type === 'ts' ? 'وجّه الشعيرة إلى المنشور واضغط 📏 قياس وحفظ.' : 'اقرأ ق ع/ق و/ق س (U/M/L) واضغط ➕ تسجيل.')];
   lines.push('عدد القياسات: ' + rr.length);
   if (isStad() && rr.length >= 2) {
@@ -1050,12 +1025,12 @@ function ttSummary(reveal) {
 
 ['input', 'change'].forEach(ev => ttRoot.addEventListener(ev, e => {
   const t = e.target, i = +t.dataset.r, f = t.dataset.f;
-  if (isNaN(i) || !f || !rowsT[i]) return;
-  if (f === 'pt') rowsT[i].pt = t.value; else rowsT[i][f] = numOrNull(t.value);
+  if (isNaN(i) || !f || !ST.rowsT[i]) return;
+  if (f === 'pt') ST.rowsT[i].pt = t.value; else ST.rowsT[i][f] = numOrNull(t.value);
   ttRefresh(); saveState();
 }));
-$('#btnTtDel').onclick = () => { const idx = rowsT.map(r => r.k).lastIndexOf(I.type); if (idx >= 0) rowsT.splice(idx, 1); ttRender(); saveState(); };
-$('#btnTtClear').onclick = () => { if (confirm('مسح كل قياسات هذا الجهاز؟')) { rowsT = rowsT.filter(r => r.k !== I.type); ttRender(); saveState(); } };
+$('#btnTtDel').onclick = () => { const idx = ST.rowsT.map(r => r.k).lastIndexOf(I.type); if (idx >= 0) ST.rowsT.splice(idx, 1); ttRender(); saveState(); };
+$('#btnTtClear').onclick = () => { if (confirm('مسح كل قياسات هذا الجهاز؟')) { ST.rowsT = ST.rowsT.filter(r => r.k !== I.type); ttRender(); saveState(); } };
 $('#btnTtEval').onclick = () => { $('#ttSum').textContent = ttSummary(true).join('\n'); };
 $('#btnTtCsv').onclick = async () => {
   const kind = I.type, lines = [kind === 'tach' ? 'Point,Hz,V,Face,U,M,L,K,S,D,dH,Z' : kind === 'theo' ? 'Point,Hz,V,Face,U,M,L,D,Z' : 'Point,Hz,V,Face,SD,hr,HD,VD,N,E,Z'];
@@ -1072,22 +1047,22 @@ $('#btnTtCsv').onclick = async () => {
 function afterTTRecord(r, msg, cls) {
   flags.read = true;
   if (r.face === 2) flags.face2 = true;
-  flags.two = new Set(rowsT.filter(q => q.k === I.type).map(q => q.pt)).size >= 2;
-  stepKey = ''; say(msg, cls); ttRender(); saveState();
+  flags.two = new Set(ST.rowsT.filter(q => q.k === I.type).map(q => q.pt)).size >= 2;
+  ST.stepKey = ''; say(msg, cls); ttRender(); saveState();
 }
-const curSetupId = () => (job.setups[job.cur] || {}).id;
+const curSetupId = () => (ST.job.setups[ST.job.cur] || {}).id;
 
 // ---- تيودوليت رقمي: Hz وV تُسجَّل تلقائياً ----
 $('#btnThRec').onclick = () => {
   const u = numOrNull($('#inU').value), m = numOrNull($('#inM').value), l = numOrNull($('#inL').value), i = numOrNull($('#inHI').value);
-  if (!I.st.mounted || !holder.station || holder.walking || !S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (!I.st.mounted || !holder.station || holder.walking || !ST.S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
   if (u === null || l === null || u <= l) return say('اكتب قراءة الشعيرة العليا U (الأكبر) والسفلى L', 'warn');
   if (i === null) return say('قِس ارتفاع الجهاز i أولاً (📏)', 'warn');
   const rd = I.readings();
-  const r = { k: 'theo', pt: holder.station.id, su: curSetupId(), hz: rd.hz, v: rd.v, face: rd.face, u, m, l, i, tr: { u: S.U, m: S.reading, l: S.L } };
-  rowsT.push(r);
+  const r = { k: 'theo', pt: holder.station.id, su: curSetupId(), hz: rd.hz, v: rd.v, face: rd.face, u, m, l, i, tr: { u: ST.S.U, m: ST.S.reading, l: ST.S.L } };
+  ST.rowsT.push(r);
   let msg = `✓ سُجّل: Hz ${dms(rd.hz)} V ${dms(rd.v)} (وجه ${rd.face === 1 ? 'I' : 'II'})`, cls = 'ok';
-  if (!CFG.exam && S.U != null) { const e = Math.max(Math.abs(u - S.U), Math.abs(l - S.L)) * 1000; msg += ` | فارق قراءة الشعيرات ${e.toFixed(0)} مم`; cls = e <= 5 ? 'ok' : e <= 15 ? 'warn' : 'bad'; }
+  if (!CFG.exam && ST.S.U != null) { const e = Math.max(Math.abs(u - ST.S.U), Math.abs(l - ST.S.L)) * 1000; msg += ` | فارق قراءة الشعيرات ${e.toFixed(0)} مم`; cls = e <= 5 ? 'ok' : e <= 15 ? 'warn' : 'bad'; }
   if (I.getTilt().arc > 3) { msg += ' | ⚠ الجهاز غير مسوّى جيداً'; if (cls === 'ok') cls = 'warn'; }
   $('#inU').value = $('#inM').value = $('#inL').value = '';
   afterTTRecord(r, msg, cls);
@@ -1102,21 +1077,21 @@ $('#btnTcRec').onclick = () => {
   const u = numOrNull($('#inU').value), m = numOrNull($('#inM').value), l = numOrNull($('#inL').value), i = numOrNull($('#inHI').value);
   const kc = numOrNull($('#inK').value), s = numOrNull($('#inS').value);
   const hD = numOrNull($('#inHzD').value), hM = numOrNull($('#inHzM').value), vD = numOrNull($('#inVD').value), vM = numOrNull($('#inVM').value);
-  if (!I.st.mounted || !holder.station || holder.walking || !S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
+  if (!I.st.mounted || !holder.station || holder.walking || !ST.S.hit) return say('الشعيرة ليست على الميرا. وجّه المنظار أولاً.', 'warn');
   if (hD === null || vD === null) return say('اكتب قراءتي Hz وV (درجات ودقائق) من نافذة القراءة', 'warn');
   if (u === null || l === null || u <= l) return say('اكتب ق ع (الأكبر) وق س (الأصغر)', 'warn');
   if (kc === null) return say('اكتب قيمة K (انظر K النظري تحت الخانات)', 'warn');
   if (s === null) return say('اكتب S: قراءة شعيرة التصويب (القصيرة تحت المنتصف)', 'warn');
   if (i === null) return say('قِس ارتفاع الجهاز J أولاً (📏)', 'warn');
   const hz = (((hD + (hM || 0) / 60) % 360 + 360) % 360) * DEG, v = (((vD + (vM || 0) / 60) % 360 + 360) % 360) * DEG, rd = I.readings();
-  const r = { k: 'tach', pt: holder.station.id, su: curSetupId(), hz, v, face: rd.face, u, m, l, s, kc, i, tr: { u: S.U, m: S.reading, l: S.L, s: S.sr, hz: rd.hz, v: rd.v } };
-  rowsT.push(r);
+  const r = { k: 'tach', pt: holder.station.id, su: curSetupId(), hz, v, face: rd.face, u, m, l, s, kc, i, tr: { u: ST.S.U, m: ST.S.reading, l: ST.S.L, s: ST.S.sr, hz: rd.hz, v: rd.v } };
+  ST.rowsT.push(r);
   const o = ttCalc(r);
   let msg = `✓ سُجّل: D = ${o.D.toFixed(2)} م` + (o.dH != null ? ` | ΔH = ${o.dH >= 0 ? '+' : ''}${o.dH.toFixed(3)} م` : ''), cls = 'ok';
   const mm = m != null ? m : (u + l) / 2;
   if (Math.abs(o.D - (u - mm) * 200) > 0.15) { msg += ' | ⚠ ق و ليست منتصف ق ع وق س (D من المعادلتين تختلف)'; cls = 'warn'; }
   if (!CFG.exam) {
-    const eh = Math.abs(wrapPi(hz - rd.hz)) / SEC, ev2 = Math.abs(wrapPi(v - rd.v)) / SEC, es = S.U != null ? Math.max(Math.abs(u - S.U), Math.abs(l - S.L), m != null ? Math.abs(m - S.reading) : 0, S.sr != null ? Math.abs(s - S.sr) : 0) * 1000 : 0;
+    const eh = Math.abs(wrapPi(hz - rd.hz)) / SEC, ev2 = Math.abs(wrapPi(v - rd.v)) / SEC, es = ST.S.U != null ? Math.max(Math.abs(u - ST.S.U), Math.abs(l - ST.S.L), m != null ? Math.abs(m - ST.S.reading) : 0, ST.S.sr != null ? Math.abs(s - ST.S.sr) : 0) * 1000 : 0;
     msg += ` | فارق قراءتك: Hz ${eh.toFixed(0)}″ و V ${ev2.toFixed(0)}″ والشعيرات ${es.toFixed(0)} مم`;
     if (cls === 'ok') cls = Math.max(eh, ev2) <= 90 && es <= 5 ? 'ok' : Math.max(eh, ev2) <= 240 && es <= 15 ? 'warn' : 'bad';
   }
@@ -1129,29 +1104,29 @@ $('#btnTcRec').onclick = () => {
 // ---- تاكيومتر آلي: EDM ----
 $('#btnMeasTS').onclick = () => {
   if (!I.st.mounted || holder.walking || !holder.station) return say('أرسل المنشور وانتظر وصوله', 'warn');
-  if (!S.hit || !S.edm) return say('الشعيرة ليست على منتصف المنشور — وجّه بدقة (EDM لا يعيد إشارة).', 'warn');
+  if (!ST.S.hit || !ST.S.edm) return say('الشعيرة ليست على منتصف المنشور — وجّه بدقة (EDM لا يعيد إشارة).', 'warn');
   const i = numOrNull($('#inHI').value), hr = numOrNull($('#inHr').value);
   if (i === null) return say('قِس ارتفاع الجهاز i أولاً (📏)', 'warn');
   if (hr === null) return say('اكتب ارتفاع العاكس hr', 'warn');
   const rd = I.readings(), ee = I.edmErr();
-  const sdv = Math.round((S.sd * (1 + ee.ppm * 1e-6) + ee.zero + (Math.random() - 0.5) * 2 * (0.002 + 2e-6 * S.sd)) * 1000) / 1000;
+  const sdv = Math.round((ST.S.sd * (1 + ee.ppm * 1e-6) + ee.zero + (Math.random() - 0.5) * 2 * (0.002 + 2e-6 * ST.S.sd)) * 1000) / 1000;
   const r = { k: 'ts', pt: holder.station.id, su: curSetupId(), hz: rd.hz, v: rd.v, face: rd.face, sd: sdv, hr, i, comp: rd.comp };
-  rowsT.push(r);
+  ST.rowsT.push(r);
   const o = ttCalc(r);
-  lastMeas = `SD ${sdv.toFixed(3)}  HD ${o.HD.toFixed(3)}  VD ${o.VD >= 0 ? '+' : ''}${o.VD.toFixed(3)}`;
-  let msg = `✓ ${r.pt}: ${lastMeas}`, cls = 'ok';
+  ST.lastMeas = `SD ${sdv.toFixed(3)}  HD ${o.HD.toFixed(3)}  VD ${o.VD >= 0 ? '+' : ''}${o.VD.toFixed(3)}`;
+  let msg = `✓ ${r.pt}: ${ST.lastMeas}`, cls = 'ok';
   if (!flags.orient) { msg += ' | ⚠ الاتجاه غير مضبوط: الإحداثيات مدوّرة'; cls = 'warn'; }
   if (!rd.comp) { msg += ' | ⚠ الميل خارج مدى المعوّض'; cls = 'bad'; }
   afterTTRecord(r, msg, cls);
 };
 $('#btnOrient').onclick = () => {
   if (!I.st.mounted) return say('ركّب الجهاز أولاً', 'warn');
-  const bs = ptById($('#bsSel').value), s0 = job.setups[job.cur];
+  const bs = ptById($('#bsSel').value), s0 = ST.job.setups[ST.job.cur];
   if (!bs || !s0) return say('اختر نقطة BS معلومة (BM)', 'warn');
   if (!holder.station || holder.station.id !== bs.id) return say('أرسل المنشور إلى ' + bs.id + ' أولاً', 'warn');
-  if (!S.hit || !S.edm) return say('وجّه الشعيرة إلى منتصف المنشور أولاً', 'warn');
+  if (!ST.S.hit || !ST.S.edm) return say('وجّه الشعيرة إلى منتصف المنشور أولاً', 'warn');
   const az = Math.atan2(bs.x - s0.x, -(bs.z - s0.z)), face2 = I.st.vz > Math.PI;
-  I.st.hz0 = I.st.heading - (az + (face2 ? Math.PI : 0)); flags.orient = true; stepKey = '';
+  I.st.hz0 = I.st.heading - (az + (face2 ? Math.PI : 0)); flags.orient = true; ST.stepKey = '';
   say(`✓ ضُبط الاتجاه: Hz = ${dms(az, 1)} (سمت ${s0.id}→${bs.id})`, 'ok');
 };
 
@@ -1190,7 +1165,7 @@ addEventListener('nivo-custom', () => buildPartLabels());
 // ================= التسميات في العرض التفكيكي =================
 const _lv = new V3();
 function updLabels() {
-  const on = I.st.explode > 0.6 && I.st.mounted && !scopeFull;
+  const on = I.st.explode > 0.6 && I.st.mounted && !ST.scopeFull;
   lblBox.style.display = on ? 'block' : 'none'; if (!on) return;
   const W = innerWidth, H = innerHeight;
   curParts.forEach(p => {
@@ -1234,7 +1209,7 @@ function updUI() {
       setTxt('#idxStat', okb ? '✓ مركزية' : 'غير مركزية — حرّك برغي الفهرس');
     } else {
       let s = `Hz ${dms(rd.hz)}\nV  ${dms(rd.v)}   وجه ${rd.face === 1 ? 'I' : 'II'}`;
-      if (kind === 'ts') s += `\n${rd.comp ? 'معوّض ✓' : '⚠ الميل خارج ±3′ — المعوّض معطّل'}${flags.orient ? '' : '   |   الاتجاه غير مضبوط'}${lastMeas ? '\n' + lastMeas : ''}`;
+      if (kind === 'ts') s += `\n${rd.comp ? 'معوّض ✓' : '⚠ الميل خارج ±3′ — المعوّض معطّل'}${flags.orient ? '' : '   |   الاتجاه غير مضبوط'}${ST.lastMeas ? '\n' + ST.lastMeas : ''}`;
       setTxt('#lcd', s);
       setTxt('#hud', m ? `Hz ${dms(rd.hz)}\nV ${dms(rd.v)}${kind === 'ts' ? (rd.comp ? ' ✓' : ' ⚠') : ''}` : '');
       $('#hud').style.color = kind === 'ts' && !rd.comp ? '#ff7b72' : '#7ee787';
@@ -1252,25 +1227,25 @@ function updUI() {
   F.legsLock = I.st.legLock.every(Boolean);
   F.mounted = m;
   F.level = m && T.arc <= ty.ring;
-  F.rough = m && !holder.walking && (isTT() ? S.ang < 0.6 * DEG : Math.abs(wrapPi(I.st.heading - bearingToStaff())) < 0.55 * DEG);
-  F.aim = m && !!S.hit && Math.abs(S.lat) < (ts ? 0.05 : 0.04) && I.st.clamp && (!isTT() || I.st.clampV) && (!ts || !!S.edm);
-  F.eye = Math.abs(eyeV - eyeIdeal) < 0.05;
-  F.focus = m && !!S.hit && Math.abs(Math.log(3 * Math.pow(200 / 3, focV) / S.dist)) <= 0.12;
+  F.rough = m && !holder.walking && (isTT() ? ST.S.ang < 0.6 * DEG : Math.abs(wrapPi(I.st.heading - bearingToStaff())) < 0.55 * DEG);
+  F.aim = m && !!ST.S.hit && Math.abs(ST.S.lat) < (ts ? 0.05 : 0.04) && I.st.clamp && (!isTT() || I.st.clampV) && (!ts || !!ST.S.edm);
+  F.eye = Math.abs(ST.eyeV - eyeIdeal) < 0.05;
+  F.focus = m && !!ST.S.hit && Math.abs(Math.log(3 * Math.pow(200 / 3, ST.focV) / ST.S.dist)) <= 0.12;
   renderSteps();
 }
 
 function step(dt) {
   I.update(dt); updateHolder(dt);
-  if (slow) { slowT += dt; if (slowT > 0.25) setHeading(I.st.heading + slow * DEG * Math.min(0.7, 0.12 + (slowT - 0.25) * 0.4) * dt); }
-  if (slowV) { slowVT += dt; if (slowVT > 0.25) setVz(I.st.vz + slowV * DEG * Math.min(0.7, 0.12 + (slowVT - 0.25) * 0.4) * dt); }
+  if (ST.slow) { ST.slowT += dt; if (ST.slowT > 0.25) setHeading(I.st.heading + ST.slow * DEG * Math.min(0.7, 0.12 + (ST.slowT - 0.25) * 0.4) * dt); }
+  if (ST.slowV) { ST.slowVT += dt; if (ST.slowVT > 0.25) setVz(I.st.vz + ST.slowV * DEG * Math.min(0.7, 0.12 + (ST.slowVT - 0.25) * 0.4) * dt); }
   updCam(dt);
   I.scopePose(scopeCam);
   scene.updateMatrixWorld();
-  S = sightInfo();
+  ST.S = sightInfo();
   scopeCam.getWorldDirection(_t); fx.setSpread(I.type === 'tach' ? 1 - _t.y * _t.y : 1); if (I.type === 'tach') updK();
-  const d = S.hit ? S.dist : 70, fd = 3 * Math.pow(200 / 3, focV);
-  blurFrac = clamp(Math.max(0, Math.abs(Math.log(fd / d)) - 0.1) * 18, 0, 16) / 370;
-  softFrac = Math.max(0, Math.abs(eyeV - eyeIdeal) - 0.04) * 20 / 370 * 2;
+  const d = ST.S.hit ? ST.S.dist : 70, fd = 3 * Math.pow(200 / 3, ST.focV);
+  ST.blurFrac = clamp(Math.max(0, Math.abs(Math.log(fd / d)) - 0.1) * 18, 0, 16) / 370;
+  ST.softFrac = Math.max(0, Math.abs(ST.eyeV - eyeIdeal) - 0.04) * 20 / 370 * 2;
   const hd = I.st.heading / DEG;
   if (hd !== lastHd) { lastHd = hd; setTxt('#hdgVal', hd.toFixed(1) + '°'); jogT.style.backgroundPositionX = (-hd * 2) + 'px'; }
   uiT += dt; if (uiT > 0.1) { uiT = 0; updUI(); }
@@ -1285,7 +1260,7 @@ function render() {
   renderer.setScissorTest(false);
   renderer.setRenderTarget(null);
   renderer.setViewport(0, 0, W, H);
-  if (scopeFull) { renderer.setClearColor(0x000000, 1); renderer.clear(); }
+  if (ST.scopeFull) { renderer.setClearColor(0x000000, 1); renderer.clear(); }
   else {
     const r = elSheet.getBoundingClientRect();
     let ox = 0, oy = -22;
@@ -1298,7 +1273,7 @@ function render() {
     const r = scopeEl.getBoundingClientRect();
     if (r.width > 4) {
       scopeCam.aspect = 1; scopeCam.updateProjectionMatrix();
-      fx.draw(scene, scopeCam, { x: r.left, y: H - r.bottom, w: r.width, h: r.height }, blurFrac, softFrac);
+      fx.draw(scene, scopeCam, { x: r.left, y: H - r.bottom, w: r.width, h: r.height }, ST.blurFrac, ST.softFrac);
     }
   }
   updLabels();
@@ -1323,8 +1298,8 @@ let last = performance.now();
 })(last);
 
 // جسر للوحدات الإضافية (مساعدة قراءة الميرا)
-window.NIVO = { sight: () => S, cfg: () => CFG, type: () => I.type, say: (t, c) => say(t, c) };
+window.NIVO = { sight: () => ST.S, cfg: () => CFG, type: () => I.type, say: (t, c) => say(t, c) };
 Object.assign(window.NIVO || (window.NIVO = {}), { toast, onJobChanged, placeInstrument });
-Object.assign(window.NIVO, { job: () => job, half: () => HALF });
+Object.assign(window.NIVO, { job: () => ST.job, half: () => HALF });
 // NIVO-V9
 // NIVO-V10
