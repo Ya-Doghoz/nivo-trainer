@@ -155,10 +155,41 @@ const onDeckOf = (B, x, z) => { const dx = x - B.x, dz = z - B.z; return Math.ab
 const deckAt = (x, z) => { for (const B of BRGS) if (onDeckOf(B, x, z)) return B; return null; };
 const onDeck = (x, z) => !!deckAt(x, z);
 // ارتفاع السطح الذي يقف عليه الجهاز/الميرا: الأرض أو سطح الجسر
+// طبقات شبكة التضاريس: دقيقة قرب المركز ثم أخشن. outer = تباعد رؤوس الطبقة الأخشن المجاورة.
+const TIERS = [{ half: 240, cell: 2.4, hole: 0, outer: 4 }, { half: 480, cell: 4, hole: 240, outer: 20 }, { half: TERH, cell: 20, hole: 480, outer: 0 }];
+// جودة الشبكة: balanced = 2.4/4/20 م (أخف) · precise = 2/4/10 م (أدق، نحو 35% رؤوس أكثر). تُقرأ من الإعدادات عند «عالم جديد».
+const TIER_PRESETS = { balanced: [2.4, 4, 20], precise: [2, 4, 10] };
+export function setWorldQuality(q) { const c = TIER_PRESETS[q] || TIER_PRESETS.balanced; TIERS[0].cell = c[0]; TIERS[0].outer = c[1]; TIERS[1].cell = c[1]; TIERS[1].outer = c[2]; TIERS[2].cell = c[2]; }
+function applyWorldCfg() { try { const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('nivo.world.cfg') : null; if (raw) setWorldQuality(JSON.parse(raw).quality); } catch (_) { /* يبقى الإعداد الحالي */ } }
+// ارتفاع رأس في طبقة: رؤوس حافتها الخارجية تُلصَق على أضلاع الطبقة الأخشن (استيفاء خطي) فلا تبقى شقوق ولا درجات بين الطبقات (B-104)
+function tierVertH(t, x, z) {
+  if (t.outer) {
+    const onX = Math.abs(Math.abs(x) - t.half) < 1e-6, onZ = Math.abs(Math.abs(z) - t.half) < 1e-6;
+    if (onX || onZ) {
+      const s = onX ? z : x, k = t.outer, s0 = Math.floor(s / k + 1e-9) * k, f = (s - s0) / k;
+      if (f > 1e-6 && f < 1 - 1e-6) {
+        const a = onX ? terrainH(x, s0) : terrainH(s0, z), b = onX ? terrainH(x, s0 + k) : terrainH(s0 + k, z);
+        return a + (b - a) * f;
+      }
+    }
+  }
+  return terrainH(x, z);
+}
+// ارتفاع السطح المرئي: استيفاء مثلثي مطابق تماماً لتثليث tierMesh، فيقف الدرون والأشجار والبيوت على الشبكة نفسها لا تحتها ولا فوقها
+function meshH(x, z) {
+  const m = Math.max(Math.abs(x), Math.abs(z)), t = m < TIERS[0].half ? TIERS[0] : m < TIERS[1].half ? TIERS[1] : TIERS[2];
+  const cx = Math.min(t.half - 1e-6, Math.max(-t.half, x)), cz = Math.min(t.half - 1e-6, Math.max(-t.half, z));
+  const fi = (cx + t.half) / t.cell, fj = (cz + t.half) / t.cell, i = Math.floor(fi), j = Math.floor(fj), u = fi - i, v = fj - j;
+  const X0 = -t.half + i * t.cell, Z0 = -t.half + j * t.cell;
+  const ha = tierVertH(t, X0, Z0), hb = tierVertH(t, X0 + t.cell, Z0), hc = tierVertH(t, X0, Z0 + t.cell);
+  if (u + v <= 1) return ha + u * (hb - ha) + v * (hc - ha);
+  const hd = tierVertH(t, X0 + t.cell, Z0 + t.cell);
+  return hd + (1 - u) * (hc - hd) + (1 - v) * (hb - hd);
+}
 export function groundH(x, z) {
   if (!P) return 0;
   const B = BRGS.length ? deckAt(x, z) : null;
-  return B ? B.y : terrainH(x, z);
+  return B ? B.y : meshH(x, z);
 }
 export const bridgeInfo = () => BRGS[0] || null;
 export const bridgeList = () => BRGS;
@@ -281,7 +312,7 @@ function disposeGroup(g) {
 export function regen(seed) {
   if (W) disposeGroup(W);
   W = new THREE.Group(); scene.add(W);
-  P = makeParams(seed); mapCache = null; makeRiver();
+  applyWorldCfg(); P = makeParams(seed); mapCache = null; makeRiver();
   HOR.set(P.env.hor); scene.background.copy(HOR); scene.fog.color.copy(HOR);
   sun.color.set(P.env.sun); sun.intensity = P.env.si; sun.position.copy(P.sunDir).multiplyScalar(120);
   hemi.intensity = 1.2 + 0.3 * P.sunDir.y;
@@ -334,7 +365,7 @@ function buildMountains() {
     W.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide, fog: false })));
   });
   const fl = new THREE.Mesh(new THREE.CircleGeometry(3300, 48), new THREE.MeshLambertMaterial({ color: 0x3e5a2f }));
-  fl.rotation.x = -Math.PI / 2; fl.position.y = -6; W.add(fl);
+  fl.rotation.x = -Math.PI / 2; fl.position.y = -150; W.add(fl);   // أخفض من أي تضريس (كان −6 م فيغطّي الوديان والنهر بلون أخضر: B-100)
 }
 
 // ثلاث طبقات من الشبكة: دقيقة قرب المركز، متوسطة، وخشنة بعيداً (مع تنانير لإخفاء الشقوق)
@@ -355,8 +386,8 @@ function terrainColor(x, z, h, slope, out) {
   if (mud > 0) { cr += (0.3 - cr) * mud * 0.85; cg += (0.27 - cg) * mud * 0.85; cb += (0.19 - cb) * mud * 0.85; }
   out[0] = cr; out[1] = cg; out[2] = cb;
 }
-function tierMesh(half, cell, hole, mat) {
-  const N = Math.round(2 * half / cell), n1 = N + 1;
+function tierMesh(T, mat) {
+  const { half, cell, hole } = T, N = Math.round(2 * half / cell), n1 = N + 1;
   const cellIn = (i, j) => {
     if (i < 0 || j < 0 || i >= N || j >= N) return false;
     if (!hole) return true;
@@ -364,7 +395,7 @@ function tierMesh(half, cell, hole, mat) {
     return !(Math.abs(cx) < hole && Math.abs(cz) < hole);
   };
   const H = new Float32Array(n1 * n1).fill(NaN);
-  const hAt = (i, j) => { i = Math.min(N, Math.max(0, i)); j = Math.min(N, Math.max(0, j)); const k = j * n1 + i; if (H[k] !== H[k]) H[k] = terrainH(-half + i * cell, -half + j * cell); return H[k]; };
+  const hAt = (i, j) => { i = Math.min(N, Math.max(0, i)); j = Math.min(N, Math.max(0, j)); const k = j * n1 + i; if (H[k] !== H[k]) H[k] = tierVertH(T, -half + i * cell, -half + j * cell); return H[k]; };
   const map = new Int32Array(n1 * n1).fill(-1), vi = [], tri = [];
   const use = k => { if (map[k] < 0) { map[k] = vi.length; vi.push(k); } return map[k]; };
   const edges = [];
@@ -380,17 +411,17 @@ function tierMesh(half, cell, hole, mat) {
   const nv = vi.length, pos = [], col = [], uv = [], tmp = [0, 0, 0], colOf = [];
   for (let q = 0; q < nv; q++) {
     const k = vi[q], i = k % n1, j = (k / n1) | 0, x = -half + i * cell, z = -half + j * cell, y = hAt(i, j);
-    const slope = Math.hypot(hAt(i + 1, j) - y, hAt(i, j + 1) - y) / cell;
+    const st = Math.max(1, Math.round(4 / cell)), slope = cell > 4 ? Math.hypot(terrainH(x + 4, z) - y, terrainH(x, z + 4) - y) / 4 : Math.hypot(hAt(i + st, j) - y, hAt(i, j + st) - y) / (st * cell);   // ميل بمسافة ثابتة ≈4 م لتتطابق الألوان بين الطبقات
     terrainColor(x, z, y, slope, tmp);
     pos.push(x, y, z); col.push(tmp[0], tmp[1], tmp[2]); uv.push(x * 0.157, z * 0.157);
     colOf.push([tmp[0], tmp[1], tmp[2]]);
   }
   // تنانير على الحواف
-  let base = nv;
+  let base = nv; const skirts = [];
   const skirt = (k1, k2) => {
     [k1, k2].forEach(k => { const q = map[k], c = colOf[q], x = pos[q * 3], y = pos[q * 3 + 1], z = pos[q * 3 + 2]; pos.push(x, y, z); col.push(c[0], c[1], c[2]); uv.push(x * 0.157, z * 0.157); });
-    [k1, k2].forEach(k => { const q = map[k], c = colOf[q], x = pos[q * 3], y = pos[q * 3 + 1] - 3, z = pos[q * 3 + 2]; pos.push(x, y, z); col.push(c[0] * 0.8, c[1] * 0.8, c[2] * 0.8); uv.push(x * 0.157, z * 0.157); });
-    tri.push(base, base + 1, base + 3, base, base + 3, base + 2); base += 4;
+    [k1, k2].forEach(k => { const q = map[k], c = colOf[q], x = pos[q * 3], y = pos[q * 3 + 1] - 1, z = pos[q * 3 + 2]; pos.push(x, y, z); col.push(c[0], c[1], c[2]); uv.push(x * 0.157, z * 0.157); });
+    tri.push(base, base + 1, base + 3, base, base + 3, base + 2); skirts.push([map[k1], map[k2], base]); base += 4;
   };
   for (let e = 0; e < edges.length; e += 2) skirt(edges[e], edges[e + 1]);
   const geo = new THREE.BufferGeometry();
@@ -399,6 +430,9 @@ function tierMesh(half, cell, hole, mat) {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(tri), 1));
   geo.computeVertexNormals();
+  const nr = geo.attributes.normal.array;                 // تنانير بنفس اتجاه إضاءة سطح الأرض فلا يظهر خط داكن عند حدود الطبقات
+  skirts.forEach(([q1, q2, b]) => { [[q1, b], [q2, b + 1], [q1, b + 2], [q2, b + 3]].forEach(([q, t]) => { nr[t * 3] = nr[q * 3]; nr[t * 3 + 1] = nr[q * 3 + 1]; nr[t * 3 + 2] = nr[q * 3 + 2]; }); });
+  geo.attributes.normal.needsUpdate = true;
   const m = new THREE.Mesh(geo, mat); W.add(m);
 }
 function buildTerrain() {
@@ -407,9 +441,7 @@ function buildTerrain() {
   for (let i = 0; i < 3000; i++) { const v = 150 + Math.floor(r0() * 90); c.fillStyle = `rgb(${v},${v},${v})`; c.fillRect(r0() * 256, r0() * 256, 1 + r0() * 2, 2 + r0() * 4); }
   const tex = new THREE.CanvasTexture(cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: tex, side: THREE.DoubleSide });
-  tierMesh(240, 2.4, 0, mat);
-  tierMesh(480, 4, 240, mat);
-  tierMesh(TERH, 20, 480, mat);
+  TIERS.forEach(T => tierMesh(T, mat));
 }
 
 // نباتات ومنازل موزَّعة على كل الخريطة + إخلاء خطوط النظر ديناميكياً
