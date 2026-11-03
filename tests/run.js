@@ -78,6 +78,11 @@ console.log('2) معادلات المسح (survey-math.js)');
   (ms.stdout || '').split('\n').filter(Boolean).forEach(l => { if (l.startsWith('PASS ')) ok(l.slice(5)); else if (l.startsWith('FAIL ')) bad(l.slice(5)); else if (l.startsWith('WARN ')) wn(l.slice(5)); });
   if (!(ms.stdout || '').trim()) wn('module-smoke لم يُنتج ناتجاً: ' + (ms.stderr || '').split('\n')[0]);
 
+  console.log('7) ظهور النهر (river-smoke) — الماء لا يختفي تحت تراب الشبكة');
+  const rs = cp.spawnSync(process.execPath, [path.join(__dirname, 'river-smoke.js'), path.join(pub, 'world.js')], { encoding: 'utf8' });
+  (rs.stdout || '').split('\n').filter(Boolean).forEach(l => { if (l.startsWith('PASS ')) ok(l.slice(5)); else if (l.startsWith('FAIL ')) bad(l.slice(5)); else if (l.startsWith('WARN ')) wn(l.slice(5)); });
+  if (!(rs.stdout || '').trim()) wn('river-smoke لم يُنتج ناتجاً: ' + (rs.stderr || '').split('\n')[0]);
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\nالنتيجة: ${pass} نجح · ${fail} فشل · ${warn} تحذير`);
   process.exit(fail ? 1 : 0);

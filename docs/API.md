@@ -85,7 +85,7 @@
 ## world-config.js  (30 سطر)
 - **يصدّر:** `WDEF`، `WC`
 
-## world.js  (812 سطر)
+## world.js  (822 سطر)
 - **يصدّر:** `renderer`، `setQuality`، `scene`، `mulberry32`، `cylBetween`، `P`، `roadX`، `riverInfo`، `setWorldQuality`، `groundH`، `bridgeInfo`، `bridgeList`، `isWater`، `wetness`، `inHouse`، `houseList`، `houseCollide`، `riverPath`، `dryNear`، `regen`، `vegK`، `setVegDensity`، `clearVeg`، `mapImage`، `setMarkers`، `instPos`، `holder`، `setStaffStyle`، `faceInstrument`، `placeHolderAt`، `sendTo`، `updateHolder`
 - **يستورد:**
   - three ← * as THREE

@@ -241,18 +241,28 @@ let waterMat = null;
 (function tickWater(t) { if (waterMat) waterMat.uniforms.uTime.value = t / 1000; requestAnimationFrame(tickWater); })(0);
 function buildRiver() {
   if (!RV) return;
-  const step = 6, S0 = -1300, n = Math.floor(2600 / step) + 1, pos = [], uv = [], idx = [], inb = [];
+  const step = 6, S0 = -1300, n = Math.floor(2600 / step) + 1, NC = 5, pos = [], uv = [], idx = [], inb = [];
   let acc = 0, px = null, pz = null;
   for (let i = 0; i < n; i++) {
     const s = S0 + i * step, c = rvCl(s), dc = rvDcl(s), cx = s * RV.dx + c * RV.nx, cz = s * RV.dz + c * RV.nz;
     let tx = RV.dx + RV.nx * dc, tz = RV.dz + RV.nz * dc; const tl = Math.hypot(tx, tz); tx /= tl; tz /= tl;
-    const hw = rvHW(s) + 2.0, y = wlAt(s) - 0.05;
+    const hw = rvHW(s) + 2.0, wy = wlAt(s) - 0.05;
     if (px !== null) acc += Math.hypot(cx - px, cz - pz);
     px = cx; pz = cz;
-    pos.push(cx + tz * hw, y, cz - tx * hw, cx - tz * hw, y, cz + tx * hw);
-    uv.push(acc / 6, 0, acc / 6, 1);
+    // 5 رؤوس عبر المجرى؛ يلتصق الماء بسطح الشبكة (فوقها بـ 20 سم) حيث لا تُحلَّل القناة في الشبكة، فلا يغطّيه التراب (B-107)
+    for (let k = 0; k < NC; k++) {
+      const o = (k / (NC - 1) * 2 - 1) * hw, x = cx + tz * o, z = cz - tx * o, inside = Math.abs(x) < TERH - 1 && Math.abs(z) < TERH - 1;
+      let y = wy;
+      if (inside) {
+        const m0 = Math.max(Math.abs(x), Math.abs(z)), c = m0 < TIERS[0].half ? 0 : m0 < TIERS[1].half ? 2 : TIERS[2].cell / 2;
+        let h = meshH(x, z);
+        if (c) h = Math.max(h, Math.min(Math.max(meshH(x + c, z), meshH(x - c, z), meshH(x, z + c), meshH(x, z - c)), h + 0.8));   // غلاف فوق انكسارات الشبكة الخشنة (بحدٍّ أقصى 0.8 م)
+        y = Math.max(wy, h + 0.2);
+      }
+      pos.push(x, y, z); uv.push(acc / 6, k / (NC - 1));
+    }
     inb.push(Math.abs(cx) < TERH - 10 && Math.abs(cz) < TERH - 10);
-    if (i > 0 && inb[i] && inb[i - 1]) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    if (i > 0 && inb[i] && inb[i - 1]) for (let k = 0; k < NC - 1; k++) { const a = (i - 1) * NC + k, b = i * NC + k; idx.push(a, a + 1, b, a + 1, b + 1, b); }
   }
   if (RV.dir < 0) for (let i = 0; i < uv.length; i += 2) uv[i] = acc / 6 - uv[i];     // الجريان نحو -s
   const geo = new THREE.BufferGeometry();
@@ -260,7 +270,7 @@ function buildRiver() {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setIndex(idx);
   waterMat = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
     uniforms: { uTime: { value: 0 }, uSun: { value: P.sunDir.clone() }, uDeep: { value: new THREE.Color(0x174562) }, uShal: { value: new THREE.Color(0x3f8a8e) }, uHor: { value: HOR.clone() } },
     vertexShader: `varying vec2 vUv; varying vec3 vW; varying float vD;
 void main(){ vUv = uv; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vD = distance(cameraPosition, vW); gl_Position = projectionMatrix * viewMatrix * w; }`,
