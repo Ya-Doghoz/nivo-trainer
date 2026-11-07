@@ -19,3 +19,5 @@ export function openTab(id) { $(`#tabs [data-t="${id}"]`).click(); }
 const cache = {};
 export function setTxt(sel, v) { if (cache[sel] !== v) { cache[sel] = v; $(sel).textContent = v; } }
 export function setCl(sel, v) { const k = sel + '#c'; if (cache[k] !== v) { cache[k] = v; $(sel).className = v; } }
+
+export function say(t, c) { const m = $('#readMsg'); m.textContent = t; m.className = 'stat ' + (c || ''); }

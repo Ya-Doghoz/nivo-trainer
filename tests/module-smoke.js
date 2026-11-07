@@ -5,7 +5,8 @@ const fs = require('fs'), path = require('path');
 let acorn;
 try { acorn = require('internal/deps/acorn/acorn/dist/acorn'); } catch (e) { console.log('WARN SKIP: acorn غير متاح'); process.exit(0); }
 const pubDir = path.resolve(process.argv[2] || 'public');
-const REAL = new Set(fs.readdirSync(pubDir).filter(f => /^(util|state|survey-math|map|job|steps|books-level|books-tt|bus)\.js$/.test(f)));
+const STUBBED = new Set(['world.js', 'instrument.js', 'targets.js', 'scopefx.js', 'extras.js', 'drone.js', 'drone-config.js', 'drone-sound.js', 'drone-worklet.js', 'logbook.js', 'help.js', 'custom.js', 'world-config.js']);
+const REAL = new Set(fs.readdirSync(pubDir).filter(f => f.endsWith('.js') && !STUBBED.has(f) && f !== 'main.js'));
 const U = () => new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => 0 : k === 'length' ? 0 : U()), apply: () => U(), construct: () => U(), set: () => true, has: () => true });
 const cache = new Map(), problems = [];
 function exportsOf(ast) { const out = []; ast.body.forEach(n => { if (n.type === 'ExportNamedDeclaration' && n.declaration) { const d = n.declaration; if (d.type === 'VariableDeclaration') d.declarations.forEach(x => { if (x.id.type === 'Identifier') out.push(x.id.name); }); else if (d.id) out.push(d.id.name); } }); return out; }

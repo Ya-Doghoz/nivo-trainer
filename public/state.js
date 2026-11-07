@@ -26,3 +26,5 @@ export const ST = {
   S: { hit: false, dist: 70, ang: 9 },
   stepKey: ''
 };
+
+export const flags = { height: false, headLevel: false, legsLock: false, mounted: false, level: false, rough: false, aim: false, eye: false, focus: false, read: false, dist: false, two: false, orient: false, face2: false };
