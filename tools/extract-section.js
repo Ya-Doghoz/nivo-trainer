@@ -103,7 +103,7 @@ for (let i = 1; i < edits.length; i++) if (edits[i].end > edits[i - 1].start) { 
 let out = src; edits.forEach(e => { out = out.slice(0, e.start) + e.text + out.slice(e.end); });
 const lastImp = ast.body.filter(n => n.type === 'ImportDeclaration').pop();
 const impEnd = out.indexOf('\n', out.indexOf(text(lastImp)) + text(lastImp).length - 1) + 1;
-if (exportOut.length) out = out.slice(0, impEnd) + `import { ${exportOut.join(', ')} } from './${modName}.js';\n` + out.slice(impEnd);
+out = out.slice(0, impEnd) + (exportOut.length ? `import { ${exportOut.join(', ')} } from './${modName}.js';\n` : `import './${modName}.js';\n`) + out.slice(impEnd);   // وحدة بلا تصدير تُستورَد جانبياً وإلا لا تُحمَّل أبداً
 // حذف الاستيرادات التي لم تعد مستعملة في main.js
 {
   const re = analyze(out), used = new Set(re.refs.filter(r => r.atRoot).map(r => r.name));

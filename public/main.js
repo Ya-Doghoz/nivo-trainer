@@ -10,6 +10,7 @@ import { ttRender, ttRefresh, updK } from './books-tt.js';
 import { cam, cv, elSheet, scopeEl, lblBox, fx, sideLayout, mapBox, mapOpen, isTT, scopeCam, FOV, eyeIdeal, jogT, elT1, elLegs } from './ctx.js';
 import { sightInfo, _t } from './sight.js';
 import { LC, drawLevel, drawHead } from './leveling.js';
+import './tabs.js';
 
 
 // ================= الكاميرا الخارجية =================

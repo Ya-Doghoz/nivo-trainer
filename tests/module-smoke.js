@@ -33,5 +33,6 @@ function load(name) {
   cache.set(name, ex); return ex;
 }
 try { load('main.js'); } catch (e) { problems.push('main.js: ' + e.message); }
+REAL.forEach(f => { if (f !== 'main.js' && !cache.has(f)) problems.push(f + ': وحدة لا يستوردها أحد (لن تُحمَّل في المتصفح!)'); });
 if (problems.length) problems.forEach(p => console.log('FAIL تحميل ' + p)); else console.log('PASS main.js وما يستورده محلياً يُحمَّل بلا استثناءات (مجسّمات)');
 process.exit(problems.length ? 1 : 0);
