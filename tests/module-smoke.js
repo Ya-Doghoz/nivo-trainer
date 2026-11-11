@@ -34,5 +34,10 @@ function load(name) {
 }
 try { load('main.js'); } catch (e) { problems.push('main.js: ' + e.message); }
 REAL.forEach(f => { if (f !== 'main.js' && !cache.has(f)) problems.push(f + ': وحدة لا يستوردها أحد (لن تُحمَّل في المتصفح!)'); });
+{   // كل H.اسم يُستدعى يجب أن يكون مسجَّلاً (H.اسم = دالة) بعد تحميل كل الوحدات — نفحص فقط الملفات المستوردة لـ hooks.js (help.js عنده H محلي خاص فيه)
+  const Hm = cache.get('hooks.js') && cache.get('hooks.js').H, used = new Set(), regd = new Set();
+  fs.readdirSync(pubDir).filter(f => f.endsWith('.js')).forEach(f => { const s = fs.readFileSync(path.join(pubDir, f), 'utf8'); if (!/from '\.\/hooks\.js'/.test(s)) return; [...s.matchAll(/(?<![\w$.])H\.(\w+)\s*(=(?!=))?/g)].forEach(m => (m[2] ? regd : used).add(m[1])); });
+  used.forEach(n => { if (!regd.has(n)) problems.push('hooks: H.' + n + ' يُستدعى ولا يوجد له تسجيل H.' + n + ' = ...'); else if (Hm && typeof Hm[n] !== 'function') problems.push('hooks: H.' + n + ' لم يُسجَّل وقت التحميل (تحقّق من ترتيب الاستيراد)'); });
+}
 if (problems.length) problems.forEach(p => console.log('FAIL تحميل ' + p)); else console.log('PASS main.js وما يستورده محلياً يُحمَّل بلا استثناءات (مجسّمات)');
 process.exit(problems.length ? 1 : 0);

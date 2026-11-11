@@ -12,6 +12,7 @@ const pos = args.filter(a => !a.startsWith('--'));
 const hoistArg = (args.find(a => a.startsWith('--hoist=')) || '').slice(8), HOISTM = new Map(); (hoistArg ? hoistArg.split(',') : []).forEach(x => { const [n, t] = x.split('@'); HOISTM.set(n, t || 'state'); });   // تصاريح تُنقل إلى state.js (أو util.js بصيغة اسم@util) بدل الوحدة
 const HOIST = new Set(HOISTM.keys());
 const pickArg = (args.find(a => a.startsWith('--pick=')) || '').slice(7), PICKN = new Set(pickArg ? pickArg.split(',') : []);
+const hookArg = (args.find(a => a.startsWith('--hook=')) || '').slice(7), HOOKS = new Set(hookArg ? hookArg.split(',') : []);   // أسماء دوال يُستدعى من الوحدة عبر H.اسم (سجلّ متأخر الربط) لكسر الدورات
 const fail = m => { console.log('✗ ' + m); process.exit(1); };
 const src = fs.readFileSync(mainF, 'utf8');
 const { ast, refs } = analyze(src);
@@ -27,12 +28,13 @@ const owner = new Map(); stmts.forEach(s => s.names.forEach(x => { if (!imports.
 function analyzeSet(sel) {
   const D = new Set(); sel.forEach(s => s.names.forEach(x => D.add(x)));
   const within = r => sel.some(s => r.start >= s.n.start && r.end <= s.n.end);
-  const needImp = new Set(), blockers = new Map(), exportNames = new Set(), hazards = new Set();
+  const needImp = new Set(), blockers = new Map(), exportNames = new Set(), hazards = new Set(), needHook = new Set();
   refs.forEach(r => {
     if (!r.atRoot) return;
     if (within(r)) {
       if (D.has(r.name)) return;
       if (imports.has(r.name)) needImp.add(r.name);
+      else if (owner.has(r.name) && HOOKS.has(r.name)) needHook.add(r.name);
       else if (owner.has(r.name)) { const o = owner.get(r.name); blockers.set(r.name, `${o.sec ? o.sec.title : '(مقدمة)'}`); }
     } else if (D.has(r.name)) {
       exportNames.add(r.name);
@@ -40,7 +42,7 @@ function analyzeSet(sel) {
     }
   });
   const side = sel.filter(s => !['FunctionDeclaration', 'ClassDeclaration', 'VariableDeclaration', 'ImportDeclaration'].includes(s.n.type));
-  return { D, needImp, blockers, exportNames, hazards, side };
+  return { D, needImp, blockers, exportNames, hazards, side, needHook };
 }
 const titleSel = pat => pat.split('|').map(p => p.trim()).filter(Boolean);
 const pick = pat => { const t = titleSel(pat); return stmts.filter(s => (s.sec && t.some(x => (x.startsWith('=') ? s.sec.title === x.slice(1) : s.sec.title.includes(x)))) || s.names.some(n => PICKN.has(n))); };   // "=عنوان" = مطابقة تامة
@@ -76,8 +78,16 @@ const impLines = [...bySrc.entries()].map(([s, arr]) => {
 const isHoisted = s => ['VariableDeclaration', 'FunctionDeclaration'].includes(s.n.type) && s.names.length && s.names.every(x => HOIST.has(x));
 const appendBy = { state: [], util: [] }; sel.filter(isHoisted).forEach(s => appendBy[HOISTM.get(s.names[0])].push('export ' + text(s.n)));
 const stateAppend = appendBy.state, utilAppend = appendBy.util;
-const body = sel.filter(s => !isHoisted(s)).map(s => {
+const hookText = s => {                                  // name → H.name (استدعاء)، أو غلاف عند استعمالها كقيمة، أو name: H.name للخصائص المختصرة
   let t = text(s.n);
+  refs.filter(r => r.atRoot && A.needHook.has(r.name) && r.start >= s.n.start && r.end <= s.n.end).sort((a, b) => b.start - a.start).forEach(r => {
+    const rep = r.shorthand ? `${r.name}: H.${r.name}` : /^\s*\(/.test(src.slice(r.end, r.end + 12)) ? `H.${r.name}` : `((...a) => H.${r.name}(...a))`;
+    t = t.slice(0, r.start - s.n.start) + rep + t.slice(r.end - s.n.start);
+  });
+  return t;
+};
+const body = sel.filter(s => !isHoisted(s)).map(s => {
+  let t = hookText(s);
   const exp = s.names.some(x => exportOut.includes(x));
   if (exp && ['FunctionDeclaration', 'ClassDeclaration', 'VariableDeclaration'].includes(s.n.type)) t = 'export ' + t;
   // نحافظ على التعليقات التي تسبق العبارة مباشرة داخل القسم
@@ -86,6 +96,7 @@ const body = sel.filter(s => !isHoisted(s)).map(s => {
   return (cm ? cm + '\n' : '') + t;
 }).join('\n');
 const titleOf = (sel.find(s => s.sec) || {}).sec;
+if (A.needHook.size && !impLines.some(l => l.includes("hooks.js"))) impLines.push("import { H } from './hooks.js';");
 let outText = `// ${titleOf ? titleOf.title : modName} — استُخرج من main.js (B-003)\n${impLines.join('\n')}\n\n${body}\n`;
 
 // ---- إعادة كتابة main.js ----
@@ -98,6 +109,7 @@ sel.forEach(s => {
 heads.filter(h => sel.some(s => s.sec && s.sec.line === h.line) && !stmts.some(s => s.sec && s.sec.line === h.line && !sel.includes(s))).forEach(h => {
   const st = lines.slice(0, h.line - 1).join('\n').length + (h.line > 1 ? 1 : 0); edits.push({ start: st, end: st + lines[h.line - 1].length + 1, text: '' });
 });
+A.needHook.forEach(n => { if (!new RegExp('\\bH\\.' + n + '\\s*=').test(src)) { const o = owner.get(n); edits.push({ start: o.n.end, end: o.n.end, text: `\nH.${n} = ${n};` }); } });
 edits.sort((a, b) => b.start - a.start);
 for (let i = 1; i < edits.length; i++) if (edits[i].end > edits[i - 1].start) { edits[i].end = Math.min(edits[i].end, edits[i - 1].start); }
 let out = src; edits.forEach(e => { out = out.slice(0, e.start) + e.text + out.slice(e.end); });
@@ -131,6 +143,7 @@ function fixStateImports(txt) {
   });
   return txt;
 }
+if (/\bH\.\w+\s*=/.test(out) && !/import \{[^}]*\bH\b[^}]*\} from '\.\/hooks\.js'/.test(out)) { const e2 = out.indexOf('\n', out.indexOf(text(lastImp)) + text(lastImp).length - 1) + 1; out = out.slice(0, e2) + "import { H } from './hooks.js';\n" + out.slice(e2); }
 out = fixStateImports(out); outText = fixStateImports(outText);
 const total = sel.reduce((t, s) => t + s.n.loc.end.line - s.n.loc.start.line + 1, 0);
 console.log(`${modName}.js: ${total} سطراً · يصدّر: ${exportOut.join('، ') || '—'}${HOIST.size ? ' · يُنقل: ' + [...HOISTM].map(([k, v]) => k + '→' + v + '.js').join('، ') : ''} · يستورد: ${[...A.needImp].join('، ') || '—'}\nعبارات تنفَّذ عند التحميل (غير تصاريح): ${A.side.length ? A.side.map(s => text(s.n).slice(0, 60).replace(/\n/g, ' ')).join(' | ') : 'لا شيء'}\nmain.js: ${lines.length} ← ${out.split('\n').length} سطراً`);
@@ -146,10 +159,12 @@ const ts = new Date().toISOString().replace(/[:.]/g, '-'), bk = path.join(root, 
 const stateF = path.join(pub, 'state.js'), utilF = path.join(pub, 'util.js');
 if (utilAppend.length) { const ut = analyze(fs.readFileSync(utilF, 'utf8') + '\n' + utilAppend.join('\n')).refs.filter(r => r.unresolved).map(r => r.name); if (ut.length) fail('الدالة المنقولة إلى util.js تعتمد على أسماء غير موجودة فيه: ' + [...new Set(ut)].join('، ')); }
 fs.mkdirSync(bk, { recursive: true }); fs.copyFileSync(mainF, path.join(bk, 'main.js')); if (stateAppend.length) fs.copyFileSync(stateF, path.join(bk, 'state.js')); if (utilAppend.length) fs.copyFileSync(utilF, path.join(bk, 'util.js')); if (smoke) fs.copyFileSync(smokeF, path.join(bk, 'module-smoke.js'));
+const hooksF = path.join(pub, 'hooks.js'), hooksNew = (A.needHook.size || /\bH\.\w+\s*=/.test(out)) && !fs.existsSync(hooksF);
+if (hooksNew) fs.writeFileSync(hooksF, '// سجلّ دوال متأخر الربط لكسر الدورات بين الوحدات: المالك يسجّل H.اسم = دالة، والمستدعي يستدعي H.اسم()\nexport const H = {};\n');
 fs.writeFileSync(outF, outText); fs.writeFileSync(mainF, out); if (stateAppend.length) fs.appendFileSync(stateF, '\n' + stateAppend.join('\n') + '\n'); if (utilAppend.length) fs.appendFileSync(utilF, '\n' + utilAppend.join('\n') + '\n'); if (smokeNew !== smoke) fs.writeFileSync(smokeF, smokeNew);
 const r = cp.spawnSync(process.execPath, ['tests/run.js'], { cwd: root, encoding: 'utf8' });
 if (r.status !== 0) {
-  fs.copyFileSync(path.join(bk, 'main.js'), mainF); if (stateAppend.length) fs.copyFileSync(path.join(bk, 'state.js'), stateF); if (utilAppend.length) fs.copyFileSync(path.join(bk, 'util.js'), utilF); if (smoke) fs.copyFileSync(path.join(bk, 'module-smoke.js'), smokeF); fs.renameSync(outF, path.join(bk, modName + '.js'));
+  fs.copyFileSync(path.join(bk, 'main.js'), mainF); if (stateAppend.length) fs.copyFileSync(path.join(bk, 'state.js'), stateF); if (utilAppend.length) fs.copyFileSync(path.join(bk, 'util.js'), utilF); if (smoke) fs.copyFileSync(path.join(bk, 'module-smoke.js'), smokeF); fs.renameSync(outF, path.join(bk, modName + '.js')); if (hooksNew) fs.renameSync(hooksF, path.join(bk, 'hooks.js'));
   console.log('✗ فشلت الاختبارات، استُعيد main.js ونُقلت الوحدة إلى ' + path.relative(root, bk) + '\n' + r.stdout.split('\n').filter(l => l.includes('✗')).slice(0, 10).join('\n')); process.exit(1);
 }
 cp.spawnSync(process.execPath, [path.join(__dirname, 'gen-api.js')], { cwd: root });
