@@ -31,6 +31,15 @@
   - ./ctx.js ← cam, cv
   - ./hooks.js ← H
 
+## contours.js  (83 سطر)
+- **يستورد:**
+  - ./util.js ← $, toast
+  - ./state.js ← ST
+  - ./hooks.js ← H
+  - ./map.js ← drawMap
+  - ./map-view.js ← * as MV
+  - ./field-math.js ← idwGrid, marchingSquares
+
 ## ctx.js  (18 سطر)
 - **يصدّر:** `FOV`، `cam`، `scopeCam`، `cv`، `elSheet`، `sideLayout`، `isTT`، `eyeIdeal`، `mapOpen`
 - **يستورد:**
@@ -97,6 +106,11 @@
   - ./targets.js ← setStaffTilt
   - ./world.js ← wetness, groundH, holder
 
+## field-math.js  (195 سطر)
+- **يصدّر:** `parseAngle`، `nearest`، `cyclePick`، `signedArea`، `polyArea`، `polyPerimeter`، `interiorAngleAt`، `polyCheck`، `traverseCompute`، `pointsOnLine`، `idwGrid`، `marchingSquares`
+- **يستورد:**
+  - ./survey-math.js ← DEG, TAU, azimuth
+
 ## help.js  (247 سطر)
 - (سكربت عادي بلا وحدات)
 
@@ -146,7 +160,7 @@
   - ./leveling.js ← drawLevel, drawHead
   - ./device.js ← drawReadWin, drawIdx, updLabels
 
-## main.js  (42 سطر)
+## main.js  (46 سطر)
 - **يستورد:**
   - ./world.js ← setStaffStyle, setQuality, setVegDensity
   - ./instrument.js ← * as I
@@ -159,10 +173,16 @@
   - ./loop.js ← resize, step, render
 - **يضيف إلى window.NIVO:** `toast, onJobChanged, placeInstrument | job: () => ST.job, half: () => HALF`
 
-## map.js  (201 سطر)
-- **يصدّر:** `HALF`، `sizeMap`، `closeMap`، `drawMap`، `reach`
+## map-view.js  (54 سطر)
+- **يصدّر:** `setMS`، `ppm`، `w2m`، `m2w`، `visible`، `gridStep`، `hitR`، `clampView`، `zoomAt`، `zoomWorld`، `panBy`، `home`، `gestureActive`، `ensureImage`، `requestImage`، `drawScaleBar`
 - **يستورد:**
-  - ./util.js ← $, $$, toast, cap, clamp
+  - ./state.js ← ST
+  - ./world.js ← mapImage
+
+## map.js  (408 سطر)
+- **يصدّر:** `HALF`، `sizeMap`، `pushUndo`، `closeMap`، `drawMap`، `reach`
+- **يستورد:**
+  - ./util.js ← $, $$, toast, cap, clamp, showErr
   - ./ctx.js ← sideLayout, mapBox, mapOpen, isTT
   - ./transfer.js ← newJob, newWorld, randSeed, onJobChanged, placeInstrument
   - ./state.js ← ST
@@ -172,6 +192,8 @@
   - ./job.js ← crd, ptById, setupById, saveState, nextId, trueRL, nextSetup
   - ./books-level.js ← fbRefresh
   - ./books-tt.js ← ttRefresh
+  - ./map-view.js ← * as MV
+  - ./field-math.js ← cyclePick
 
 ## mount.js  (53 سطر)
 - **يصدّر:** `updLegLabels`، `updClampUI`، `afterChange`، `doMount`
@@ -195,6 +217,30 @@
   - ./map.js ← reach, closeMap
   - ./state.js ← ST
   - ./hooks.js ← H
+
+## polygons.js  (277 سطر)
+- **يستورد:**
+  - ./util.js ← $, toast
+  - ./state.js ← ST
+  - ./job.js ← ptById, nextId
+  - ./hooks.js ← H
+  - ./map.js ← drawMap, pushUndo
+  - ./transfer.js ← onJobChanged
+  - ./map-view.js ← * as MV
+  - ./world.js ← isWater
+  - ./field-math.js ← parseAngle, nearest, polyCheck
+
+## profile.js  (120 سطر)
+- **يستورد:**
+  - ./util.js ← $, toast
+  - ./state.js ← ST
+  - ./job.js ← trueRL, crd
+  - ./world.js ← groundH
+  - ./survey-math.js ← azimuth, DEG
+  - ./hooks.js ← H
+  - ./map.js ← drawMap
+  - ./map-view.js ← * as MV
+  - ./field-math.js ← pointsOnLine, nearest
 
 ## scopefx.js  (72 سطر)
 - **يصدّر:** `createScopeFX`
@@ -261,6 +307,16 @@
   - ./books-tt.js ← ttRender
   - ./job.js ← saveState, loadSaved, randomJob
   - ./hooks.js ← H
+
+## traverse.js  (132 سطر)
+- **يستورد:**
+  - ./util.js ← $, toast
+  - ./state.js ← ST
+  - ./job.js ← crd
+  - ./hooks.js ← H
+  - ./map.js ← drawMap, pushUndo
+  - ./map-view.js ← * as MV
+  - ./field-math.js ← parseAngle, nearest, traverseCompute
 
 ## tt-tools.js  (22 سطر)
 - **يستورد:**

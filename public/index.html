@@ -40,7 +40,7 @@ button:disabled{opacity:.45}
 .row label{font-size:calc(12px*var(--k));min-width:78px;color:#aab}
 .row label.chk{min-width:0;color:#dde}
 input[type=range]{flex:1;min-width:110px}
-input[type=number]{flex:1;min-width:80px;background:#111823;border:1px solid #3a4a62;color:#fff;border-radius:8px;padding:8px;font:inherit;font-size:calc(13px*var(--k))}
+input[type=number],input[type=text]{flex:1;min-width:80px;background:#111823;border:1px solid #3a4a62;color:#fff;border-radius:8px;padding:8px;font:inherit;font-size:calc(13px*var(--k))}
 #lv{display:block;margin:6px auto;width:min(100%,260px);aspect-ratio:1;touch-action:none;background:#0a0d12;border-radius:12px}
 #hv{display:block;margin:6px auto;width:min(100%,170px);aspect-ratio:1;background:#0a0d12;border-radius:12px}
 .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
@@ -87,15 +87,27 @@ body[data-inst="ts"] :is(.lv-only,.stad-only,.tc-only,.th-only){display:none!imp
 /* الخريطة */
 #mapBox{position:fixed;inset:0;background:#0b0f16;z-index:12;overflow-y:auto;display:none;padding:8px}
 #mapHead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#mapNav{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 0}
+#mapNav button{padding:4px 10px;font-size:calc(12px*var(--k))}
 #mapTools{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
 #mapBody{display:block}
 #mapC{display:block;margin:6px auto;border-radius:10px;touch-action:none;cursor:crosshair}
+#mapSide{min-width:0}
+#mapFeat details{margin:8px 0}
+#mapFeat table{direction:ltr}
 #mapList{margin-top:8px}
 .mrow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #1d2733;font-size:13px;flex-wrap:wrap}
 .mrow input{width:110px;background:#111823;border:1px solid #3a4a62;color:#fff;border-radius:6px;padding:4px}
 .mrow button{padding:4px 8px}
 .mi.bm{color:#3fb950}.mi.pt{color:#ff6b6b}.mi.st{color:#4dabf7}
 .mx{color:#8a96a8;font-size:12px;direction:ltr}
+#profC{display:block;width:100%;max-width:470px;height:170px;background:#0a0d12;border-radius:10px;margin:6px 0;touch-action:pan-y}
+#travTable .trow,#polyTable .prow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0}
+#travTable input,#polyTable input,#polyPop input{width:92px;min-width:70px;background:#111823;border:1px solid #3a4a62;color:#fff;border-radius:6px;padding:5px;font:inherit;font-size:13px;text-align:center}
+#travTable input.ok{border-color:#3fb950}#travTable input.bad{border-color:#f85149}
+#travRes table td,#travRes table th{font-size:11px}
+#qryCard{display:none;background:#111823;border:1px solid #6a5a20;border-radius:10px;padding:8px 10px;margin:8px 0}
+#polyPop{position:absolute;display:none;z-index:8;background:rgba(17,24,35,.96);border:1px solid #3a4a62;border-radius:10px;padding:8px;width:230px}
 
 /* حاسوب / شاشة عريضة: لوحة جانبية */
 @media (min-width:760px) and (min-aspect-ratio:5/4){
@@ -108,7 +120,8 @@ body[data-inst="ts"] :is(.lv-only,.stad-only,.tc-only,.th-only){display:none!imp
   #btnExit{right:calc(var(--pw) + 8px)}
   #lv{width:min(100%,300px)}
   #mapBody{display:flex;gap:14px;align-items:flex-start}
-  #mapList{flex:1;margin-top:0;max-height:82vh;overflow:auto}
+  #mapSide{flex:1;margin-top:0;max-height:84vh;overflow:auto}
+  #mapList{max-height:none;overflow:visible}
 }
 </style>
 <script type="importmap">{"imports":{"three":"/three/build/three.module.js"}}</script>
@@ -133,20 +146,75 @@ body[data-inst="ts"] :is(.lv-only,.stad-only,.tc-only,.th-only){display:none!imp
 
 <div id="mapBox">
   <div id="mapHead"><b>🗺 الخريطة والمهمة — البذرة <span id="mapSeed"></span></b><button id="mapClose">✕ إغلاق</button></div>
+  <div id="mapNav">
+    <button id="mapUndo" disabled>↩ تراجع</button><button id="mapRedo" disabled>↪ إعادة</button>
+    <button id="mapZoomOut">➖ تصغير</button><button id="mapZoomIn">➕ تكبير</button><button id="mapHome">🎯 كامل المنطقة</button>
+  </div>
   <div id="mapTools">
     <button data-mt="pt" class="on">📍 نقطة</button>
     <button data-mt="bm">🧷 BM</button>
     <button data-mt="inst">🔭 جهاز</button>
     <button data-mt="staff">👷 ميرا/منشور</button>
     <button data-mt="move">✋ تحريك</button><button data-mt="pin">📌 تثبيت</button><button data-mt="del">🗑 حذف</button>
+    <button data-mt="qry">🔍 استعلام</button>
+    <button data-mt="prof">📉 مقطع</button>
+    <button data-mt="poly">⬛ مضلع</button>
+    <button data-mt="trav">🧭 مسار</button>
+    <button data-mt="cont">⛰ كنتوري</button>
     <button id="btnJobRnd" class="zap">🎲 مهمة عشوائية</button>
     <button id="btnWorldRnd" class="zap">🌍 عالم جديد</button>
   </div>
   <div id="mapBody">
     <canvas id="mapC"></canvas>
-    <div id="mapList"></div>
+    <div id="mapSide">
+      <div id="mapList"></div>
+      <div id="mapFeat">
+        <div id="qryCard">
+          <div class="row" style="justify-content:space-between"><b id="qryTitle"></b><button id="qryClose">✕</button></div>
+          <div id="qryBody"></div>
+          <div class="row qrl"><label>تسجيل المنسوب</label><input id="qryRL" type="number" step="0.001" inputmode="decimal" placeholder="أدخل RL (م)"><button id="qrySave" class="big">✓ حفظ</button></div>
+        </div>
+        <details id="profBox">
+          <summary>📉 المقطع التضاريسي</summary>
+          <div id="profPicks" class="note"></div>
+          <canvas id="profC" width="470" height="170"></canvas>
+          <div id="profStats" class="st"></div>
+          <div class="row"><button id="profClear">🧹 مسح الاختيار</button><button id="profSwap">⇄ اعكس من ← إلى</button></div>
+          <p class="note">فعّل أداة «📉 مقطع» ثم انقر نقطتين على الخريطة (تلتصق بأقرب نقطة موجودة). يُرسم المقطع بالمسافة الأفقية والميل، وتظهر عليه النقاط الواقعة على المسار (ممر ± 12 م) مع مناسيبها المسوّحة.</p>
+        </details>
+        <details id="travBox">
+          <summary>🧭 المسار المساحي (Traverse)</summary>
+          <div class="row"><label>الإدخال</label><select id="travMode" style="flex:0 0 auto;min-width:190px"><option value="ang">زوايا داخلية عند المحطات</option><option value="az">اتجاهات (أزيموت) للأضلاع</option></select></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="travClosed" checked> مسار مغلق (يرجع للبداية)</label></div>
+          <div class="row"><label>اتجاه الضلع الأول</label><input id="travAz0" type="text" inputmode="decimal" placeholder="° — فارغ = من الخريطة"></div>
+          <div id="travTable"></div>
+          <div class="row"><button id="travCalc" class="big">🧮 احسب وتحقّق</button><button id="travClear">🧹 مسح المسار</button></div>
+          <div id="travRes"></div>
+          <p class="note">فعّل أداة «🧭 مسار» وانقر المحطات بالتتابع (تلتصق بأقرب نقطة). أدخل الأطوال (م) والزوايا بصيغة درجات أو د-ق-ث (مثل 45 أو 45 30 15) — الخانات فارغة عمداً ليكتبها الطالب من قياساته. «احسب» يعرض الإحداثيات وخطأ الإغلاق ودقة 1:N ومجموع الزوايا، ومقارنة كل محطة بموضعها الحقيقي.</p>
+        </details>
+        <details id="contBox">
+          <summary>⛰ خريطة كنتورية من نقاطي</summary>
+          <div class="row"><label>الفاصل الكنتوري</label><select id="contIv" style="flex:0 0 auto"><option value="0.25">0.25 م</option><option value="0.5">0.5 م</option><option value="1" selected>1 م</option><option value="2">2 م</option><option value="5">5 م</option></select></div>
+          <div class="row"><label class="chk"><input type="checkbox" id="contShow" checked> إظهار الطبقة</label><button id="contGo" class="big">⛰ ارسم</button></div>
+          <div id="contInfo" class="note"></div>
+          <p class="note">تُبنى من النقاط التي سجّلت مناسيبها (أداة 🔍 أو حقل RL في القائمة) بالتثاقل العكسي (IDW) ثم تتبّع الخطوط (Marching Squares). قارن كنتورك بكنتور الخريطة الحقيقي وجرّب تغيير الفاصل.</p>
+        </details>
+        <details id="polyBox">
+          <summary>⬛ المضلعات (أطوال وزوايا)</summary>
+          <div class="row"><select id="polySel" style="flex:1;min-width:110px"></select><button id="polyNew">➕ جديد</button><button id="polyCloseB">🔒 أغلق</button><button id="polyDel">🗑 حذف</button></div>
+          <div id="polyTable"></div>
+          <div id="polyStats" class="st"></div>
+          <p class="note">فعّل أداة «⬛ مضلع» وانقر الرؤوس بالتتابع (تنشأ نقطة جديدة في الفراغ أو تلتصق بنقطة موجودة) — انقر الرأس الأول مرة أخرى للإغلاق. رقاقة «…» على منتصف كل ضلع = خانة طول فارغة: انقر الضلع أو استعمل الجدول، وكذلك الزاوية عند كل رأس. بعد الإدخال فقط يظهر الفرق عن القيمة الفعلية.</p>
+        </details>
+      </div>
+    </div>
   </div>
-  <p class="note" id="mapNote">اختر أداة ثم المس الخريطة. 📍 نقطة مسح · 🧷 BM معلوم (منسوبه وإحداثياته في القائمة) · 🔭 يضع الجهاز في ذلك الموضع (ويعيد ضبطه) · 👷 يرسل الحامل إلى أقرب نقطة · 🗑 يحذف. الخطوط الكنتورية بالأمتار وشبكة كل 20 م. ▲ BM · ● نقطة · ◆ موضع جهاز. الإحداثيات: E شرقاً و N شمالاً.</p>
+  <p class="note" id="mapNote">التكبير: عجلة الفأرة أو إصبعان أو ➕/➖، والتحريك: سحب بإصبع أو زر الفأرة الأيمن. كل نقرة تُنفَّذ عند رفع الإصبع، وهالة صفراء تميّز أقرب نقطة لإصبعك؛ إن كانت نقطتان متقاربتين فاللمسة الثانية على المكان نفسه تنقل الاختيار للأخرى. الأدوات: 📍 نقطة · 🧷 BM معلوم · 🔭 موضع جهاز · 👷 ميرا/منشور · ✋ تحريك · 📌 تثبيت · 🗑 حذف · 🔍 استعلام (بيانات نقطة مسجلة وتسجيل منسوبها بخانة فارغة — لا يضيف نقاطاً) · 📉 مقطع تضاريسي · ⬛ مضلع بأطوال وزوايا · 🧭 مسار مساحي · ⛰ كنتور من نقاطك. رقاقات «الطول؟» على أضلاع المضلع تُفتح من أي أداة. ↩/↪ للتراجع والإعادة. الشبكة تكيفية بتسميات E/N. ▲ BM · ● نقطة · ◆ موضع جهاز. الإحداثيات: E شرقاً و N شمالاً.</p>
+  <div id="polyPop">
+    <b id="polyTitle" class="stat" style="margin:0"></b>
+    <div class="row"><input id="polyIn" type="text" inputmode="decimal" placeholder="أدخل القيمة"></div>
+    <div class="row"><button id="polySave" class="big">✓ حفظ ومقارنة</button><button id="polyCancel">إلغاء</button></div>
+  </div>
 </div>
 
 <div id="sheet">
